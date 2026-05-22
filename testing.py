@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 import time
 
 # =============== EDIT THESE CREDENTIALS ===============
-TELEGRAM_BOT_TOKEN = "8261353471:AAEWByECnKyV7FNNQNe4flU2pEfRYfsJi5M"
-TELEGRAM_CHAT_ID = "6620972737"
+TELEGRAM_BOT_TOKEN = "8906533334:AAHI1LT_kPuGex0ved3juNjjgfjuEVFONy0"
+TELEGRAM_CHAT_ID = "-5212565182"
 # =====================================================
 
 API_TICKERS = "https://public.coindcx.com/market_data/v3/current_prices/futures/rt"
