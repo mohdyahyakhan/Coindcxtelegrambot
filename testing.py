@@ -97,4 +97,5 @@ class AlertBot:
             await self.session.close()
 
 if __name__ == "__main__":
+    print("BOT START HUA HAI BHAI")  # ye line add kar
     asyncio.run(AlertBot().run())
