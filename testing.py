@@ -177,4 +177,5 @@ class AlertBot:
             await self.session.close()
 
 if __name__ == "__main__":
+    print("Bot starting... All systems GO!")
     asyncio.run(AlertBot().run())
