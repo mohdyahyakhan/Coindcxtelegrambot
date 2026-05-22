@@ -3,6 +3,7 @@ import threading
 import asyncio
 import aiohttp
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo # <-- IST ke liye add kiya
 import time
 
 # =============== EDIT THESE CREDENTIALS ===============
@@ -48,7 +49,8 @@ class AlertBot:
         try:
             tickers = await self.fetch_perps()
             now = time.time()
-            ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+            # Time IST me convert kiya
+            ts = datetime.now(ZoneInfo("Asia/Kolkata")).strftime('%Y-%m-%d %H:%M:%S IST')
             print(f"[{ts}] Scanning {len(tickers)} perpetual markets...")
 
             if len(tickers) == 0:
@@ -108,5 +110,5 @@ def run_web():
 
 threading.Thread(target=run_web).start()
 if __name__ == "__main__":
-    print("BOT START HUA HAI BHAI")  # ye line add kar
+    print("BOT START HUA HAI BHAI") # ye line add kar
     asyncio.run(AlertBot().run())
