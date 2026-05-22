@@ -1,3 +1,6 @@
+from flask 
+import Flask
+import threading
 import asyncio
 import aiohttp
 from datetime import datetime, timezone
@@ -95,7 +98,16 @@ class AlertBot:
             print("\nStopping bot...")
         finally:
             await self.session.close()
+app = Flask('')
 
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_web():
+    app.run(host='0.0.0.0', port=10000)
+
+threading.Thread(target=run_web).start()
 if __name__ == "__main__":
     print("BOT START HUA HAI BHAI")  # ye line add kar
     asyncio.run(AlertBot().run())
