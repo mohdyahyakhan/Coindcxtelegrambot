@@ -69,7 +69,6 @@ def bot1_scan_24h_pump():
             print(f"Bot1 Error: {e}")
 
         time.sleep(300)
-
 # ===== BOT 2: ST 10/3 vs EMA300 CROSS =====
 def get_candles(symbol, interval='5m', limit=400):
     try:
