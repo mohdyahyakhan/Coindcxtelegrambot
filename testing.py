@@ -7,8 +7,9 @@ import threading
 import os
 
 # ============ CONFIG ============
-TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
-TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"
+TELEGRAM_BOT_TOKEN = "8906533334:AAHI1LT_kPuGex0ved3juNjjgfjuEVFONy0
+"
+TELEGRAM_CHAT_ID = "-5212565182"
 ALERT_THRESHOLD = 40.0 # 40%+ pump
 ALERT_COOLDOWN = 21600 # 6 hours in seconds
 WATCHLIST_DAYS = 2
