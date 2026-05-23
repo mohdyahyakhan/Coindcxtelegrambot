@@ -1,201 +1,201 @@
-from flask import Flask
-import threading
 import asyncio
 import aiohttp
-from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
-import time
+import pandas as pd
 import numpy as np
+from datetime import datetime, timedelta
+import pytz
+from flask import Flask
+import threading
 
-# =============== EDIT THESE CREDENTIALS ===============
-TELEGRAM_BOT_TOKEN = "8906533334:AAHI1LT_kPuGex0ved3juNjjgfjuEVFONy0"
-TELEGRAM_CHAT_ID = "-5212565182"
-# =====================================================
+# ============ CONFIG ============
+TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
+TELEGRAM_CHAT_ID = "YOUR_CHAT_ID"
+ALERT_THRESHOLD = 40.0 # 40%+ pump
+ALERT_COOLDOWN = 21600 # 6 hours in seconds
+WATCHLIST_DAYS = 2
+SCAN_INTERVAL = 300 # 5 minutes
 
-API_TICKERS = "https://public.coindcx.com/market_data/v3/current_prices/futures/rt"
-API_CANDLES = "https://public.coindcx.com/market_data/candles"
-ALERT_THRESHOLD = 40.0
-SCAN_INTERVAL = 300
-ALERT_COOLDOWN = 21600
-WATCHLIST_DAYS = 2 # 2 din tak watch karega
+# Supertrend params
+ST_PERIOD = 10
+ST_MULTIPLIER = 3
+EMA_PERIOD = 300
 
-# Supertrend function
-def supertrend(high, low, close, period=10, multiplier=3):
-    tr1 = high - low
-    tr2 = np.abs(high - np.roll(close, 1))
-    tr3 = np.abs(low - np.roll(close, 1))
-    tr = np.maximum(tr1, np.maximum(tr2, tr3))
-    atr = np.convolve(tr, np.ones(period)/period, mode='valid')
-    atr = np.concatenate([np.full(period-1, np.nan), atr])
+# ============ FLASK APP FOR RENDER ============
+app = Flask(__name__)
 
-    hl2 = (high + low) / 2
-    upperband = hl2 + (multiplier * atr)
-    lowerband = hl2 - (multiplier * atr)
+@app.route('/')
+def home():
+    return "Bot is running!"
 
-    supertrend = np.full(len(close), np.nan)
-    direction = np.full(len(close), 1) # 1 = up, -1 = down
-
-    for i in range(1, len(close)):
-        if close[i] > upperband[i-1]:
-            direction[i] = 1
-        elif close[i] < lowerband[i-1]:
-            direction[i] = -1
-        else:
-            direction[i] = direction[i-1]
-            if direction[i] == 1 and lowerband[i] < lowerband[i-1]:
-                lowerband[i] = lowerband[i-1]
-            if direction[i] == -1 and upperband[i] > upperband[i-1]:
-                upperband[i] = upperband[i-1]
-
-        if direction[i] == 1:
-            supertrend[i] = lowerband[i]
-        else:
-            supertrend[i] = upperband[i]
-
-    return supertrend, direction
-
-class AlertBot:
+# ============ BOT CLASS ============
+class PumpBot:
     def __init__(self):
-        self.session = None
         self.last_alerted = {}
-        self.watchlist = {} # {symbol: {'added': timestamp, 'alerted': False}}
+        self.watchlist = {}
+        self.ist = pytz.timezone('Asia/Kolkata')
 
-    async def send_telegram(self, text: str):
+    async def send_telegram(self, msg):
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-        try:
-            async with self.session.post(url, json=payload, timeout=10) as r:
-                if r.status!= 200:
-                    print(f"Telegram Error {r.status}: {await r.text()}")
-        except Exception as e:
-            print(f"Failed to send Telegram: {e}")
+        data = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": msg,
+            "parse_mode": "Markdown"
+        }
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, data=data) as resp:
+                return await resp.json()
 
-    async def fetch_perps(self):
-        async with self.session.get(API_TICKERS, timeout=15) as r:
-            r.raise_for_status()
-            data = await r.json()
-            return data.get('prices', {})
+    async def get_tickers(self):
+        url = "https://api.coindcx.com/exchange/ticker"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                return await resp.json()
 
-    async def fetch_candles(self, symbol, interval="5m", limit=400):
-        params = {"pair": symbol, "interval": interval, "limit": limit}
-        async with self.session.get(API_CANDLES, params=params, timeout=15) as r:
-            if r.status!= 200: return None
-            data = await r.json()
-            if not data or len(data) < 300: return None
-            return {
-                'high': np.array([float(x['high']) for x in data]),
-                'low': np.array([float(x['low']) for x in data]),
-                'close': np.array([float(x['close']) for x in data])
-            }
+    async def get_candles(self, symbol):
+        candles_url = f"https://api.coindcx.com/market_data/candles?pair={symbol}&interval=5m&limit=350"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url=candles_url) as resp:
+                data = await resp.json()
+                if isinstance(data, list) and len(data) > 0:
+                    df = pd.DataFrame(data, columns=['time', 'open', 'high', 'low', 'close', 'volume'])
+                    df['time'] = pd.to_datetime(df['time'], unit='ms')
+                    df = df.astype({'open': float, 'high': float, 'low': float, 'close': float, 'volume': float})
+                    return df
+                return pd.DataFrame()
 
-    async def check_entry_condition(self, symbol):
-        df = await self.fetch_candles(symbol, "5m", 400)
-        if df is None: return False, "No Data"
+    def calculate_supertrend(self, df):
+        hl2 = (df['high'] + df['low']) / 2
+        atr = df['high'].rolling(ST_PERIOD).max() - df['low'].rolling(ST_PERIOD).min()
+        atr = atr.rolling(ST_PERIOD).mean()
 
-        close, high, low = df['close'], df['high'], df['low']
+        upperband = hl2 + (ST_MULTIPLIER * atr)
+        lowerband = hl2 - (ST_MULTIPLIER * atr)
 
-        # EMA 300
-        ema300 = np.convolve(close, np.ones(300)/300, mode='valid')
-        ema300 = np.concatenate([np.full(299, np.nan), ema300])
+        supertrend = [True] * len(df)
+        final_upperband = [0] * len(df)
+        final_lowerband = [0] * len(df)
 
-        # Supertrend 10,3
-        st, direction = supertrend(high, low, close, 10, 3)
+        for i in range(1, len(df)):
+            if df['close'][i] > final_upperband[i-1]:
+                supertrend[i] = True
+            elif df['close'][i] < final_lowerband[i-1]:
+                supertrend[i] = False
+            else:
+                supertrend[i] = supertrend[i-1]
 
-        # Conditions:
-        # 1. Supertrend ne EMA300 ko neeche cross kiya
-        # 2. Price Supertrend ke neeche hai
-        st_below_ema = st[-1] < ema300[-1] and st[-2] >= ema300[-2] # Cross under
-        price_below_st = close[-1] < st[-1]
+                if supertrend[i] and lowerband[i] < final_lowerband[i-1]:
+                    final_lowerband[i] = final_lowerband[i-1]
+                else:
+                    final_lowerband[i] = lowerband[i]
 
-        if st_below_ema and price_below_st:
-            return True, f"ST: ${st[-1]:.4f} < EMA300: ${ema300[-1]:.4f}"
-        else:
-            return False, f"ST: ${st[-1]:.4f} | EMA300: ${ema300[-1]:.4f}"
+                if not supertrend[i] and upperband[i] > final_upperband[i-1]:
+                    final_upperband[i] = final_upperband[i-1]
+                else:
+                    final_upperband[i] = upperband[i]
+
+        df['supertrend'] = [final_lowerband[i] if supertrend[i] else final_upperband[i] for i in range(len(df))]
+        df['st_direction'] = supertrend
+        return df
+
+    def calculate_ema(self, df):
+        df['ema300'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
+        return df
+
+    async def check_confirmation(self, symbol): # Checks 5m Supertrend
+        df = await self.get_candles(symbol)
+        if len(df) < EMA_PERIOD + 50:
+            return False, None
+
+        df = self.calculate_supertrend(df)
+        df = self.calculate_ema(df)
+
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+
+        # Condition 1: ST crossed above EMA300
+        st_crossed = prev['supertrend'] < prev['ema300'] and last['supertrend'] > last['ema300']
+
+        # Condition 2: Price dipped below ST after cross
+        price_below_st = last['close'] < last['supertrend'] and last['st_direction']
+
+        if st_crossed:
+            self.watchlist[symbol]['crossed'] = True
+
+        if self.watchlist[symbol].get('crossed') and price_below_st:
+            return True, last['close']
+
+        return False, None
 
     async def scan(self):
-        try:
-            tickers = await self.fetch_perps()
-            now = time.time()
-            ts = datetime.now(ZoneInfo("Asia/Kolkata")).strftime('%Y-%m-%d %H:%M:%S IST')
-            print(f"[{ts}] Scanning {len(tickers)} markets | Watchlist: {len(self.watchlist)}")
+        print(f"\n[{datetime.now(self.ist).strftime('%Y-%m-%d %H:%M:%S')}] Scanning 200+ markets")
+        tickers = await self.get_tickers()
+        now = datetime.now().timestamp()
+        ts = datetime.now(self.ist).strftime('%Y-%m-%d %H:%M:%S IST')
 
-            # 1. 40%+ Pump Alert - Band nahi hoga
-            for symbol, t in tickers.items():
-                if not symbol.startswith('B-'): continue
+        # Bot 1: 40%+ Pump Alert
+        for symbol, t in tickers.items():
+            if not symbol.startswith('B-'): continue
 
-                coin = symbol.replace('B-', '').replace('_USDT', '')
-                change_24h = float(t.get('change_24_hour', t.get('pc', 0)))
-                price = float(t.get('ls', 0))
+            coin = symbol.replace('B-', '').replace('_USDT', '')
+            change_24h = float(t.get('change_24_hour', t.get('pc', 0)))
+            price = float(t.get('ls', 0))
 
-                if change_24h >= ALERT_THRESHOLD:
-                    last_time = self.last_alerted.get(symbol, 0)
-                    if now - last_time > ALERT_COOLDOWN:
-                        msg = (
-                            f"🚀 *40%+ PUMP ALERT*\n"
-                            f"Coin: `{coin}`\n"
-                            f"Signal: *24H UP MOVE*\n"
-                            f"24h Change: *+{change_24h:.2f}%*\n"
-                            f"Price: `${price:,.4f}`\n"
-                            f"Time: `{ts}`"
-                        )
-                        await self.send_telegram(msg)
-                        self.last_alerted[symbol] = now
-                        # Watchlist me add kar do
-                        self.watchlist[symbol] = {'added': now, 'alerted': False}
-                        print(f"PUMP Alert sent for {coin} + Added to watchlist")
+            if change_24h >= ALERT_THRESHOLD:
+                last_time = self.last_alerted.get(symbol, 0)
+                if now - last_time > ALERT_COOLDOWN:
+                    msg = (
+                        f"🚀 *40%+ PUMP ALERT*\n"
+                        f"Coin: `{coin}`\n"
+                        f"Signal: *24H UP MOVE*\n"
+                        f"24h Change: *+{change_24h:.2f}%*\n"
+                        f"Price: `${price:,.4f}`\n"
+                        f"Time: `{ts}`"
+                    )
+                    await self.send_telegram(msg)
+                    self.last_alerted[symbol] = now
+                    self.watchlist[symbol] = {'added': now, 'alerted': False, 'crossed': False}
+                    print(f"PUMP Alert sent for {coin} + Added to watchlist")
 
-            # 2. Watchlist Cleanup - 2 din purane hatao
-            expired = [s for s, v in self.watchlist.items() if now - v['added'] > WATCHLIST_DAYS * 86400]
-            for s in expired: del self.watchlist[s]
+        # Bot 2: ST+EMA300 Confirmation
+        expired = []
+        for symbol, data in self.watchlist.items():
+            if now - data['added'] > WATCHLIST_DAYS * 86400:
+                expired.append(symbol)
+                continue
 
-            # 3. Entry Condition Check - Watchlist wale coins pe
-            for symbol, data in list(self.watchlist.items()):
-                if data['alerted']: continue # Ek baar hi confirmation bhejna hai
-
-                coin = symbol.replace('B-', '').replace('_USDT', '')
-                entry_ok, entry_info = await self.check_entry_condition(symbol)
-
-                if entry_ok:
-                    current_price = float(tickers[symbol]['ls'])
+            if not data['alerted']:
+                confirmed, entry = await self.check_confirmation(symbol)
+                if confirmed:
+                    coin = symbol.replace('B-', '').replace('_USDT', '')
                     msg = (
                         f"🎯 *CONFIRMATION ENTRY ALERT*\n"
                         f"Coin: `{coin}`\n"
-                        f"Signal: *ST 10,3 < EMA300 + Price < ST*\n"
-                        f"Condition: `{entry_info}`\n"
-                        f"Price: `${current_price:,.4f}`\n"
-                        f"Timeframe: `5m`\n"
+                        f"Signal: *Supertrend CROSSED ABOVE EMA300 + Price dipped below ST*\n"
+                        f"Entry Zone: Near `${entry:,.4f}`\n"
                         f"Time: `{ts}`"
                     )
                     await self.send_telegram(msg)
                     self.watchlist[symbol]['alerted'] = True
                     print(f"CONFIRMATION Alert sent for {coin}")
 
-        except Exception as e:
-            print(f"Scan error: {e}")
+        for symbol in expired:
+            del self.watchlist[symbol]
+            print(f"Removed {symbol} from watchlist - expired")
 
     async def run(self):
-        self.session = aiohttp.ClientSession()
-        print("="*60)
-        print("CoinDCX Pump + Entry Confirmation Monitor")
-        print("="*60)
-        print("✅ Bot 1: 40%+ Pump Alert - ACTIVE")
-        print("✅ Bot 2: ST+EMA300 Entry - ACTIVE | Watchlist 2 Days")
-        print(f"INFO - Threshold: +{ALERT_THRESHOLD}% | Interval: {SCAN_INTERVAL}s")
-        try:
-            while True:
+        await self.send_telegram("✅ *Bot 1: 40%+ Pump Alert - ACTIVE*\n✅ *Bot 2: ST+EMA300 Entry - ACTIVE | Watchlist 2 Days*\n\n_Scanning CoinDCX Futures every 5 min..._")
+        while True:
+            try:
                 await self.scan()
-                await asyncio.sleep(SCAN_INTERVAL)
-        except KeyboardInterrupt:
-            print("\nStopping bot...")
-        finally:
-            await self.session.close()
+            except Exception as e:
+                print(f"Error in scan: {e}")
+            await asyncio.sleep(SCAN_INTERVAL)
 
-app = Flask('')
-@app.route('/')
-def home(): return "Bot is running!"
-def run_web(): app.run(host='0.0.0.0', port=10000)
-threading.Thread(target=run_web).start()
+def run_bot():
+    bot = PumpBot()
+    asyncio.run(bot.run())
 
 if __name__ == "__main__":
-    print("BOT START HUA HAI BHAI")
-    asyncio.run(AlertBot().run())
+    bot_thread = threading.Thread(target=run_bot)
+    bot_thread.start()
+    app.run(host='0.0.0.0', port=10000)
