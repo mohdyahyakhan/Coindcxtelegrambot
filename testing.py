@@ -1,7 +1,5 @@
 import asyncio
 import aiohttp
-import pandas as pd
-import numpy as np
 from datetime import datetime, timedelta
 import pytz
 from flask import Flask
