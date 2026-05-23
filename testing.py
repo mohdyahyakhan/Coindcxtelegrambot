@@ -5,11 +5,11 @@ import pytz
 from flask import Flask
 import threading
 import os
+import pandas as pd # Added - kyunki code me use ho raha hai
 
 # ============ CONFIG ============
-TELEGRAM_BOT_TOKEN ="8906533334:AAHI1LT_kPuGex0ved3juNjjgfjuEVFONy0
-"
-TELEGRAM_CHAT_ID ="-5212565182"
+TELEGRAM_BOT_TOKEN = "8906533334:AAHI1LT_kPuGex0ved3juNjjgfjuEVFONy0" # Yaha apna token daal
+TELEGRAM_CHAT_ID = "-5212565182" # Yaha chat ID daal
 ALERT_THRESHOLD = 40.0 # 40%+ pump
 ALERT_COOLDOWN = 21600 # 6 hours in seconds
 WATCHLIST_DAYS = 2
@@ -196,8 +196,8 @@ def run_bot():
     asyncio.run(bot.run())
 
 if __name__ == "__main__":
-    import os
     bot_thread = threading.Thread(target=run_bot)
+    bot_thread.daemon = True # Added: Flask band ho to bot bhi band ho jaye
     bot_thread.start()
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
