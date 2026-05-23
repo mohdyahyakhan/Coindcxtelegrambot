@@ -1,5 +1,5 @@
 Flask==3.0.0
 requests==2.31.0
 pandas==2.1.4
-pandas_ta==0.3.14b0
+pandas-ta==0.3.14b
 gunicorn==21.2.0
