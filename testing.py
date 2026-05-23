@@ -35,16 +35,23 @@ def bot1_scan_24h_pump():
             url = "https://api.coindcx.com/exchange/v1/markets_details"
             res = requests.get(url, timeout=15).json()
 
+            print(f"Total markets found: {len(res)}") # Debug line
+
+            bsb_found = False
             for market in res:
+                pair = market.get('pair', '')
+                if 'BSB' in pair: # BSB jisme bhi hai wo print kar
+                    print(f"DEBUG BSB: {pair} | market: {market.get('market')} | 24h: {market.get('change_24_hour')}%")
+                    bsb_found = True
+
                 if market.get('market')!= 'futures':
                     continue
-                if not market.get('pair', '').endswith('USDT'):
+                if not pair.endswith('USDT'):
                     continue
 
-                symbol = market['pair'] # "BSB-USDT"
+                symbol = market['pair']
                 change_24h = float(market.get('change_24_hour', 0))
 
-                # 40% up ya down dono
                 if abs(change_24h) >= PUMP_PERCENT:
                     if symbol not in WATCHLIST:
                         WATCHLIST[symbol] = time.time()
@@ -55,10 +62,13 @@ def bot1_scan_24h_pump():
                         send_telegram(msg)
                         print(f"Bot1 Alert: {symbol} {change_24h}%")
 
+            if not bsb_found:
+                print("BSB pair API me mila hi nahi")
+
         except Exception as e:
             print(f"Bot1 Error: {e}")
 
-        time.sleep(300) # Har 5 min me check
+        time.sleep(300)
 
 # ===== BOT 2: ST 10/3 vs EMA300 CROSS =====
 def get_candles(symbol, interval='5m', limit=400):
