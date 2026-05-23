@@ -69,7 +69,7 @@ def bot1_scan_24h_pump():
             print(f"Bot1 Error: {e}")
 
         time.sleep(300)
-        if __name__ == '__main__':
+if __name__ == '__main__':
     threading.Thread(target=bot1_scan_24h_pump, daemon=True).start()
     threading.Thread(target=bot2_check_entry, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
