@@ -8,8 +8,8 @@ import os
 import pandas as pd # Added - kyunki code me use ho raha hai
 
 # ============ CONFIG ============
-TELEGRAM_BOT_TOKEN = "8906533334:AAHI1LT_kPuGex0ved3juNjjgfjuEVFONy0" # Yaha apna token daal
-TELEGRAM_CHAT_ID = "-5212565182" # Yaha chat ID daal
+TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 ALERT_THRESHOLD = 40.0 # 40%+ pump
 ALERT_COOLDOWN = 21600 # 6 hours in seconds
 WATCHLIST_DAYS = 2
