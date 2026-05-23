@@ -197,6 +197,7 @@ def run_bot():
     asyncio.run(bot.run())
 
 if __name__ == "__main__":
+    import os
     bot_thread = threading.Thread(target=run_bot)
     bot_thread.start()
     port = int(os.environ.get('PORT', 10000))
