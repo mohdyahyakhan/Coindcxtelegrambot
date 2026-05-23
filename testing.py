@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import pytz
 from flask import Flask
 import threading
+import os
 
 # ============ CONFIG ============
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
@@ -198,6 +199,5 @@ def run_bot():
 if __name__ == "__main__":
     bot_thread = threading.Thread(target=run_bot)
     bot_thread.start()
-    import os
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
