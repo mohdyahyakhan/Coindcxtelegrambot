@@ -5,6 +5,7 @@ import pandas as pd
 import ta
 from threading import Thread
 from flask import Flask
+import threading
 
 # ===== CONFIG =====
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
