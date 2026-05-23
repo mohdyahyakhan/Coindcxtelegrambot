@@ -2,7 +2,7 @@ import requests
 import time
 import os
 import pandas as pd
-import pandas_ta as ta
+import ta
 from threading import Thread
 from flask import Flask
 
@@ -90,8 +90,7 @@ def bot2_check_entry():
 
                 # Indicators
                 df['ema300'] = ta.ema(df['close'], length=300)
-                st = ta.supertrend(df['high'], df['low'], df['close'], length=10, multiplier=3)
-                df['supertrend'] = st[f'SUPERT_{10}_{3.0}']
+                df['supertrend'] = ta.trend.SuperTrendIndicator(df['high'], df['low'], df['close'], window=10, multiplier=3).super_trend()
 
                 # Last 2 candles me cross check karo
                 if len(df) < 2:
