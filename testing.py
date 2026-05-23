@@ -143,7 +143,7 @@ def run_bots():
     Thread(target=bot1_scan_24h_pump).start()
     Thread(target=bot2_check_entry).start()
 
-if __name__ == "__main__":
-    Thread(target=run_bots).start()
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+if __name__ == '__main__':
+    threading.Thread(target=bot1_scan_24h_pump, daemon=True).start()
+    threading.Thread(target=bot2_check_entry, daemon=True).start()
+    app.run(host='0.0.0.0', port=10000)
