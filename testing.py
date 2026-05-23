@@ -124,7 +124,7 @@ class AlertBot:
                 if not symbol.startswith('B-'): continue
 
                 coin = symbol.replace('B-', '').replace('_USDT', '')
-                change_24h = float(t.get('pc', 0))
+                change_24h = float(t.get('change_24_hour', t.get('pc', 0)))
                 price = float(t.get('ls', 0))
 
                 if change_24h >= ALERT_THRESHOLD:
