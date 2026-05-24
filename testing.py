@@ -8,11 +8,11 @@ import numpy as np
 
 app = Flask(__name__)
 
-PUMP_PERCENT = 20 # Bot1 trigger
+PUMP_PERCENT = 40 # Bot1 trigger
 WATCHLIST_DAYS = 2 # 2 din tak monitor
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
-EMA_PERIOD = 200
+EMA_PERIOD = 300
 
 # CoinDCX Futures List - Teri di hui list
 COINDX_FUTURES = {
@@ -222,7 +222,7 @@ def bot2_supertrend_exit():
 
                 current_st = df['supertrend'].iloc[-1]
                 prev_st = df['supertrend'].iloc[-2]
-                current_ema = df['ema200'].iloc[-1]
+                current_ema = df['ema300'].iloc[-1]
                 current_close = df['close'].iloc[-1]
                 prev_close = df['close'].iloc[-2]
 
@@ -234,7 +234,7 @@ def bot2_supertrend_exit():
                         if info['last_st']!= 'down':
                             msg = f"🔻 <b>BOT 2: SUPERTREND EXIT</b> 🔻\n\n" \
                                   f"<b>Coin:</b> {cdcx_name}\n" \
-                                  f"<b>Reason:</b> Supertrend(10,3) crossed below EMA(200)\n" \
+                                  f"<b>Reason:</b> Supertrend(10,3) crossed below EMA(300)\n" \
                                   f"<b>Timeframe:</b> 5min\n" \
                                   f"<b>Price:</b> ${current_close:.6f}\n" \
                                   f"<b>EMA300:</b> ${current_ema:.6f}\n\n" \
