@@ -26,42 +26,41 @@ def bot1_scan_24h_pump():
     print("Bot1 thread started", flush=True)
     while True:
         try:
-            # Step 1: Sab active futures pairs
             url1 = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/active_instruments"
             instruments = requests.get(url1, timeout=15).json()
             print(f"Futures pairs found: {len(instruments)}", flush=True)
 
-            # Step 2: Sahi ticker API - /tickers hai, /ticker nahi
             url2 = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/tickers"
             ticker_data = requests.get(url2, timeout=15).json()
             
-            # tickers API direct dict deta hai: {'B-BSB_USDT': {...}, ...}
-            if not isinstance(ticker_data, dict):
+            # DEBUG: Ticker me kitni keys hain aur kaunsi hain
+            if isinstance(ticker_data, dict):
+                ticker_keys = list(ticker_data.keys())
+                print(f"Tickers received: {len(ticker_keys)}", flush=True)
+                print(f"Sample keys: {ticker_keys[:5]}", flush=True) # Pehli 5 keys dikhao
+            else:
                 print(f"Ticker API error: {ticker_data}", flush=True)
                 time.sleep(300)
                 continue
 
             for pair in instruments:
-                # B-BSB_USDT ko handle karo
                 if 'BSB' in pair.upper():
                     print(f"FOUND BSB in instruments: {pair}", flush=True)
 
-                # Sirf USDT pairs, aur B- prefix wale bhi
                 if not pair.endswith('_USDT'):
                     continue
 
-                # Ticker se data nikalo
                 ticker = ticker_data.get(pair)
                 if not ticker:
+                    if 'BSB' in pair.upper():
+                        print(f"BSB key not found in ticker_data", flush=True)
                     continue
 
-                # 'P' = 24h change percent in futures ticker
                 change_24h = float(ticker.get('P', 0))
 
                 if 'BSB' in pair.upper():
                     print(f"BSB 24h data: {change_24h}%", flush=True)
 
-                # Display ke liye naam clean karo: B-BSB_USDT -> BSB-USDT
                 clean_pair = pair.replace('B-', '').replace('_', '-')
 
                 if abs(change_24h) >= PUMP_PERCENT:
