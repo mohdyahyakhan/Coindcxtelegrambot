@@ -27,7 +27,15 @@ def bot1_scan_binance_pump():
     while True:
         try:
             url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-            tickers = requests.get(url, timeout=15).json()
+            response = requests.get(url, timeout=15)
+            tickers = response.json()
+
+            # Error check daal diya
+            if isinstance(tickers, dict) and 'code' in tickers:
+                print(f"Binance API Error: {tickers}", flush=True)
+                time.sleep(60)
+                continue
+
             print(f"Binance Futures pairs found: {len(tickers)}", flush=True)
 
             for ticker in tickers:
