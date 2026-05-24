@@ -27,47 +27,38 @@ def bot1_scan_24h_pump():
     print("Bot1 thread started", flush=True)
     while True:
         try:
-            url = "https://api.coindcx.com/exchange/v1/markets_details"
+            # CoinDCX Futures ka asli API
+            url = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/active_instruments"
             res = requests.get(url, timeout=15).json()
+            print(f"Futures pairs found: {len(res)}", flush=True)
 
-            print(f"Total markets found: {len(res)}", flush=True)
-
-            bsb_found = False
             for market in res:
-                pair = market.get('pair', '')
-                market_type = market.get('market', '')
-                
-                # BSB ka exact data print karo, bina filter ke
-                if 'BSB' in pair.upper():
-                    print(f"FOUND BSB: pair='{pair}' | market='{market_type}' | 24h={market.get('change_24_hour')}%", flush=True)
-                    bsb_found = True
+                pair = market.get('pair', '') # Yaha 'BSB-USDT' aayega
+                change_24h = float(market.get('change_24_hour_percent', 0))
 
-                # Ab filter lagao
-                if market_type!= 'futures':
-                    continue
+                # BSB ka debug - isse pata chalega mil raha ya nahi
+                if 'BSB' in pair.upper():
+                    print(f"FOUND BSB: {pair} | 24h: {change_24h}%", flush=True)
+
+                # Sirf USDT pairs check karo
                 if not pair.endswith('USDT'):
                     continue
 
-                symbol = market['pair']
-                change_24h = float(market.get('change_24_hour', 0))
-
+                # 40% pump/dump check
                 if abs(change_24h) >= PUMP_PERCENT:
-                    if symbol not in WATCHLIST:
-                        WATCHLIST[symbol] = time.time()
+                    if pair not in WATCHLIST:
+                        WATCHLIST[pair] = time.time() # ← Ye line fix ki hai
                         msg = f"🚨 <b>BOT 1: 24H PUMP ALERT</b> 🚨\n\n" \
-                              f"<b>Coin:</b> {symbol}\n" \
+                              f"<b>Coin:</b> {pair}\n" \
                               f"<b>24h Change:</b> {change_24h}%\n\n" \
-                              f"Added to watchlist for 2 days.\nScanning for ST+EMA300 entry..."
+                              f"Added to watchlist for 2 days."
                         send_telegram(msg)
-                        print(f"Bot1 Alert: {symbol} {change_24h}%", flush=True)
-
-            if not bsb_found:
-                print("BSB pair API me mila hi nahi", flush=True)
+                        print(f"Bot1 Alert: {pair} {change_24h}%", flush=True)
 
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
 
-        time.sleep(300)
+        time.sleep(300) # 5 min me check karega
 def bot2_check_entry():
     print("Bot2 thread started", flush=True)
     while True:
