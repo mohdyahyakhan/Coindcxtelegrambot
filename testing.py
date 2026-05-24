@@ -26,41 +26,39 @@ def bot1_scan_24h_pump():
     print("Bot1 thread started", flush=True)
     while True:
         try:
+            # Step 1: Sab active futures pairs lo
             url1 = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/active_instruments"
             instruments = requests.get(url1, timeout=15).json()
             print(f"Futures pairs found: {len(instruments)}", flush=True)
 
-            url2 = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/tickers"
-            ticker_data = requests.get(url2, timeout=15).json()
+            # Step 2: /exchange/ticker se sabka data lo - ye wala kaam karta hai
+            url2 = "https://api.coindcx.com/exchange/ticker"
+            tickers = requests.get(url2, timeout=15).json()
+            print(f"Tickers received: {len(tickers)}", flush=True)
             
-            # DEBUG: Ticker me kitni keys hain aur kaunsi hain
-            if isinstance(ticker_data, dict):
-                ticker_keys = list(ticker_data.keys())
-                print(f"Tickers received: {len(ticker_keys)}", flush=True)
-                print(f"Sample keys: {ticker_keys[:5]}", flush=True) # Pehli 5 keys dikhao
-            else:
-                print(f"Ticker API error: {ticker_data}", flush=True)
-                time.sleep(300)
-                continue
+            # List ko dict me convert karo fast lookup ke liye
+            ticker_dict = {item['market']: item for item in tickers if 'market' in item}
 
             for pair in instruments:
                 if 'BSB' in pair.upper():
                     print(f"FOUND BSB in instruments: {pair}", flush=True)
 
-                if not pair.endswith('_USDT'):
-                    continue
-
-                ticker = ticker_data.get(pair)
+                # B-BSB_USDT ko BSBUSDT me convert karo kyunki /exchange/ticker me aisa naam hai
+                ticker_key = pair.replace('B-', '').replace('_', '')
+                
+                ticker = ticker_dict.get(ticker_key)
                 if not ticker:
                     if 'BSB' in pair.upper():
-                        print(f"BSB key not found in ticker_data", flush=True)
+                        print(f"BSB key '{ticker_key}' not found in ticker_dict", flush=True)
                     continue
 
-                change_24h = float(ticker.get('P', 0))
+                # /exchange/ticker me 'change_24_hour' field hoti hai
+                change_24h = float(ticker.get('change_24_hour', 0))
 
                 if 'BSB' in pair.upper():
                     print(f"BSB 24h data: {change_24h}%", flush=True)
 
+                # Display ke liye clean naam
                 clean_pair = pair.replace('B-', '').replace('_', '-')
 
                 if abs(change_24h) >= PUMP_PERCENT:
