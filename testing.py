@@ -8,7 +8,7 @@ import numpy as np
 
 app = Flask(__name__)
 
-PUMP_PERCENT = >=20 # Bot1 trigger
+PUMP_PERCENT = 20 # Bot1 trigger
 WATCHLIST_DAYS = 2 # 2 din tak monitor
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
@@ -175,7 +175,7 @@ def bot1_scan_bybit_futures():
                 cdcx_count += 1
                 change_24h = float(ticker['price24hPcnt']) * 100
 
-                if symbol not in WATCHLIST and abs(change_24h) >= PUMP_PERCENT:
+                if symbol not in WATCHLIST and change_24h >= PUMP_PERCENT:
                     WATCHLIST[symbol] = {
                         'time': time.time(),
                         'last_st': None
