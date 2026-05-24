@@ -35,11 +35,15 @@ def bot1_scan_24h_pump():
             bsb_found = False
             for market in res:
                 pair = market.get('pair', '')
-                if 'BSB' in pair:
-                    print(f"DEBUG BSB: {pair} | market: {market.get('market')} | 24h: {market.get('change_24_hour')}%", flush=True)
+                market_type = market.get('market', '')
+                
+                # BSB ka exact data print karo, bina filter ke
+                if 'BSB' in pair.upper():
+                    print(f"FOUND BSB: pair='{pair}' | market='{market_type}' | 24h={market.get('change_24_hour')}%", flush=True)
                     bsb_found = True
 
-                if market.get('market')!= 'futures':
+                # Ab filter lagao
+                if market_type!= 'futures':
                     continue
                 if not pair.endswith('USDT'):
                     continue
@@ -64,7 +68,6 @@ def bot1_scan_24h_pump():
             print(f"Bot1 Error: {e}", flush=True)
 
         time.sleep(300)
-
 def bot2_check_entry():
     print("Bot2 thread started", flush=True)
     while True:
