@@ -8,7 +8,7 @@ import numpy as np
 
 app = Flask(__name__)
 
-PUMP_PERCENT = 40 # Bot1 trigger
+PUMP_PERCENT_24H = 40 # Bot1 trigger - 24H Change
 WATCHLIST_DAYS = 2 # 2 din tak monitor
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
@@ -29,7 +29,7 @@ COINDX_FUTURES = {
     'BANDUSDT', 'BARDUSDT', 'BASEDUSDT', 'BATUSDT', 'BBUSDT', 'BCHUSDT', 'BELUSDT',
     'BERAUSDT', 'BICOUSDT', 'BIGTIMEUSDT', 'BILLUSDT', 'BIOUSDT', 'BIRBUSDT',
     'BLURUSDT', 'BMTUSDT', 'BNBUSDT', 'BNTUSDT', 'BOMEUSDT', 'BRETTUSDT', 'BREVUSDT',
-    'BROCCOLI714USDT', 'BSBUSDT', 'BSVUSDT', 'BTCUSDT', 'BZUSDT', 'CUSDT', 'C98USDT',
+    'BROCCOLI714USDT', 'BSBUSDT', 'BSVUSDT', 'BTCUSDT', 'BZUSDT', 'C98USDT',
     'CAKEUSDT', 'CARVUSDT', 'CATIUSDT', 'CCUSDT', 'CELOUSDT', 'CETUSUSDT', 'CFGUSDT',
     'CFXUSDT', 'CGPTUSDT', 'CHIPUSDT', 'CHILLGUYUSDT', 'CHRUSDT', 'CHZUSDT', 'CKBUSDT',
     'CLUSDT', 'CLANKERUSDT', 'COMPUSDT', 'COOKIEUSDT', 'COSUSDT', 'COTIUSDT', 'COWUSDT',
@@ -56,10 +56,10 @@ COINDX_FUTURES = {
     'MIRAUSDT', 'MITOUSDT', 'MMTUSDT', 'MOCAUSDT', 'MONUSDT', 'MOODENGUSDT', 'MORPHOUSDT',
     'MOVEUSDT', 'MOVRUSDT', 'MTLUSDT', 'MUBARAKUSDT', 'NATGASUSDT', 'NEARUSDT', 'NEOUSDT',
     'NEWTUSDT', 'NFPUSDT', 'NIGHTUSDT', 'NILUSDT', 'NMRUSDT', 'NOMUSDT', 'NOTUSDT',
-    'NXPCUSDT', 'OGUSDT', 'OGNUSDT', 'ONDOUSDT', 'ONEUSDT', 'ONGUSDT', 'ONTUSDT',
+    'NXPCUSDT', 'OGNUSDT', 'ONDOUSDT', 'ONEUSDT', 'ONGUSDT', 'ONTUSDT',
     'OPUSDT', 'OPENUSDT', 'OPNUSDT', 'ORCAUSDT', 'ORDIUSDT', 'PARTIUSDT', 'PAXGUSDT',
     'PENDLEUSDT', 'PENGUUSDT', 'PEOPLEUSDT', 'PHAUSDT', 'PIPPINUSDT', 'PIXELUSDT',
-    'PLUMEUSDT', 'PNUTUSDT', 'POLUSDT', 'POLYXUSDT', 'POPCATUSDT', 'PORTALUSDT',
+    'PLUMEUSDT', 'PNUTUSDT', 'POLYXUSDT', 'POPCATUSDT', 'PORTALUSDT',
     'POWERUSDT', 'POWRUSDT', 'PRLUSDT', 'PROMUSDT', 'PROVEUSDT', 'PUMPUSDT', 'PUNDIXUSDT',
     'PYTHUSDT', 'QNTUSDT', 'QTUMUSDT', 'RAREUSDT', 'RAVEUSDT', 'RECALLUSDT', 'REDUSDT',
     'RENDERUSDT', 'RESOLVUSDT', 'REZUSDT', 'RIFUSDT', 'RIVERUSDT', 'RLCUSDT', 'ROBOUSDT',
@@ -124,7 +124,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else:
             df.loc[df.index[i], 'supertrend'] = df['supertrend'].iloc[i-1]
 
-    df['ema200'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
+    df['ema300'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     return df
 
 def get_klines(symbol, interval='5', limit=350):
@@ -168,22 +168,25 @@ def bot1_scan_bybit_futures():
             for ticker in tickers:
                 symbol = ticker['symbol']
 
-                # CoinDCX Filter - Yahi main change hai
+                # CoinDCX Filter
                 if symbol not in COINDX_FUTURES:
                     continue
 
                 cdcx_count += 1
                 change_24h = float(ticker['price24hPcnt']) * 100
 
-                if symbol not in WATCHLIST and change_24h >= PUMP_PERCENT:
+                # YAHI MAIN CHANGE HAI: 24h Change >= 40%
+                if symbol not in WATCHLIST and change_24h >= PUMP_PERCENT_24H:
                     WATCHLIST[symbol] = {
                         'time': time.time(),
                         'last_st': None
                     }
                     cdcx_name = symbol.replace('USDT', '-USDT')
+                    price = ticker['lastPrice']
                     msg = f"🚨 <b>BOT 1: 24H PUMP ALERT</b> 🚨\n\n" \
                           f"<b>Coin:</b> {cdcx_name}\n" \
                           f"<b>24h Change:</b> {change_24h:.2f}%\n" \
+                          f"<b>Price:</b> ${price}\n" \
                           f"<b>Exchange:</b> CoinDCX Listed\n" \
                           f"<b>Source:</b> Bybit Futures\n\n" \
                           f"Added to Bot2 watchlist for {WATCHLIST_DAYS} days."
@@ -195,7 +198,7 @@ def bot1_scan_bybit_futures():
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
 
-        time.sleep(300)
+        time.sleep(300) # Har 5 min me check
 
 def bot2_supertrend_exit():
     print("Bot2 Supertrend thread started", flush=True)
