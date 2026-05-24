@@ -27,27 +27,39 @@ def bot1_scan_24h_pump():
     print("Bot1 thread started", flush=True)
     while True:
         try:
-            # CoinDCX Futures ka asli API
-            url = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/active_instruments"
-            res = requests.get(url, timeout=15).json()
-            print(f"Futures pairs found: {len(res)}", flush=True)
+            # Step 1: Sab active futures pairs ke naam lo
+            url1 = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/active_instruments"
+            instruments = requests.get(url1, timeout=15).json()
+            print(f"Futures pairs found: {len(instruments)}", flush=True)
 
-            for market in res:
-                pair = market.get('pair', '') # Yaha 'BSB-USDT' aayega
-                change_24h = float(market.get('change_24_hour_percent', 0))
+            # Step 2: Un sab ka 24h data lo
+            url2 = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/ticker"
+            tickers = requests.get(url2, timeout=15).json()
+            
+            # ticker API list deta hai, usko dict me convert karo fast lookup ke liye
+            ticker_dict = {item['s']: item for item in tickers if 's' in item}
 
-                # BSB ka debug - isse pata chalega mil raha ya nahi
+            # Ab har pair ko check karo
+            for pair in instruments:
                 if 'BSB' in pair.upper():
-                    print(f"FOUND BSB: {pair} | 24h: {change_24h}%", flush=True)
+                    print(f"FOUND BSB in instruments: {pair}", flush=True)
 
-                # Sirf USDT pairs check karo
                 if not pair.endswith('USDT'):
                     continue
 
-                # 40% pump/dump check
+                # Ticker data se 24h change nikalo
+                ticker_data = ticker_dict.get(pair)
+                if not ticker_data:
+                    continue
+
+                change_24h = float(ticker_data.get('P', 0)) # 'P' = 24h change percent
+
+                if 'BSB' in pair.upper():
+                    print(f"BSB 24h data: {change_24h}%", flush=True)
+
                 if abs(change_24h) >= PUMP_PERCENT:
                     if pair not in WATCHLIST:
-                        WATCHLIST[pair] = time.time() # ← Ye line fix ki hai
+                        WATCHLIST = time.time()
                         msg = f"🚨 <b>BOT 1: 24H PUMP ALERT</b> 🚨\n\n" \
                               f"<b>Coin:</b> {pair}\n" \
                               f"<b>24h Change:</b> {change_24h}%\n\n" \
@@ -58,13 +70,7 @@ def bot1_scan_24h_pump():
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
 
-        time.sleep(300) # 5 min me check karega
-def bot2_check_entry():
-    print("Bot2 thread started", flush=True)
-    while True:
-        # Tera bot2 ka code yaha rahega
-        time.sleep(60)
-
+        time.sleep(300)
 @app.route('/')
 def home():
     return "Bot is running"
