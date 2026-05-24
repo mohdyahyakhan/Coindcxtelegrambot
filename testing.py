@@ -32,8 +32,21 @@ def bot1_scan_24h_pump():
 
             url2 = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/ticker"
             tickers = requests.get(url2, timeout=15).json()
-            
-            ticker_dict = {item['s']: item for item in tickers if 's' in item}
+
+            # DEBUG: Ticker kya hai ye print karo
+            print(f"Ticker type: {type(tickers)}", flush=True)
+            if isinstance(tickers, list) and len(tickers) > 0:
+                print(f"First ticker item: {tickers[0]}", flush=True)
+            elif isinstance(tickers, dict):
+                print(f"Ticker keys: {list(tickers.keys())[:5]}", flush=True)
+
+            # Ab dono case handle karo
+            ticker_dict = {}
+            if isinstance(tickers, list):
+                ticker_dict = {item['s']: item for item in tickers if isinstance(item, dict) and 's' in item}
+            elif isinstance(tickers, dict):
+                # Agar dict hai to shayad {'BSB-USDT': {data},...} format me ho
+                ticker_dict = tickers
 
             for pair in instruments:
                 if 'BSB' in pair.upper():
@@ -46,7 +59,8 @@ def bot1_scan_24h_pump():
                 if not ticker_data:
                     continue
 
-                change_24h = float(ticker_data.get('P', 0))
+                # 'P' ya 'priceChangePercent' check karo
+                change_24h = float(ticker_data.get('P', ticker_data.get('priceChangePercent', 0)))
 
                 if 'BSB' in pair.upper():
                     print(f"BSB 24h data: {change_24h}%", flush=True)
@@ -65,7 +79,6 @@ def bot1_scan_24h_pump():
             print(f"Bot1 Error: {e}", flush=True)
 
         time.sleep(300)
-
 @app.route('/')
 def home():
     return "Bot is running"
