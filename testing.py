@@ -36,10 +36,8 @@ def bot1_scan_24h_pump():
             url2 = "https://api.coindcx.com/exchange/v1/derivatives/futures/data/ticker"
             tickers = requests.get(url2, timeout=15).json()
             
-            # ticker API list deta hai, usko dict me convert karo fast lookup ke liye
             ticker_dict = {item['s']: item for item in tickers if 's' in item}
 
-            # Ab har pair ko check karo
             for pair in instruments:
                 if 'BSB' in pair.upper():
                     print(f"FOUND BSB in instruments: {pair}", flush=True)
@@ -47,7 +45,6 @@ def bot1_scan_24h_pump():
                 if not pair.endswith('USDT'):
                     continue
 
-                # Ticker data se 24h change nikalo
                 ticker_data = ticker_dict.get(pair)
                 if not ticker_data:
                     continue
