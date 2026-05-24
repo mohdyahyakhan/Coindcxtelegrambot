@@ -8,7 +8,7 @@ import numpy as np
 
 app = Flask(__name__)
 
-PUMP_PERCENT = 40 # Bot1 trigger
+PUMP_PERCENT = 15 # Bot1 trigger
 WATCHLIST_DAYS = 2 # 2 din tak monitor
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
