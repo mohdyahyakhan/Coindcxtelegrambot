@@ -22,21 +22,22 @@ def send_telegram(msg):
     except Exception as e:
         print(f"Telegram Error: {e}", flush=True)
 
-def bot1_scan_binance_pump():
-    print("Bot1 Binance thread started", flush=True)
+def bot1_scan_binance_spot():
+    print("Bot1 Binance Spot thread started", flush=True)
     while True:
         try:
-            url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
-            response = requests.get(url, timeout=15)
+            # Futures ki jagah Spot API - ye ban nahi hai
+            url = "https://api.binance.com/api/v3/ticker/24hr"
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            response = requests.get(url, timeout=15, headers=headers)
             tickers = response.json()
 
-            # Error check daal diya
             if isinstance(tickers, dict) and 'code' in tickers:
-                print(f"Binance API Error: {tickers}", flush=True)
+                print(f"Binance Spot API Error: {tickers}", flush=True)
                 time.sleep(60)
                 continue
 
-            print(f"Binance Futures pairs found: {len(tickers)}", flush=True)
+            print(f"Binance Spot pairs found: {len(tickers)}", flush=True)
 
             for ticker in tickers:
                 symbol = ticker['symbol']
@@ -58,7 +59,7 @@ def bot1_scan_binance_pump():
                         msg = f"🚨 <b>BOT 1: 24H PUMP ALERT</b> 🚨\n\n" \
                               f"<b>Coin:</b> {cdcx_name}\n" \
                               f"<b>24h Change:</b> {change_24h}%\n" \
-                              f"<b>Source:</b> Binance\n\n" \
+                              f"<b>Source:</b> Binance Spot\n\n" \
                               f"Added to watchlist for 2 days."
                         send_telegram(msg)
                         print(f"Bot1 Alert: {cdcx_name} {change_24h}%", flush=True)
@@ -75,5 +76,5 @@ def home():
 if __name__ == '__main__':
     print(f"BOT_TOKEN exists: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
     print(f"CHAT_ID exists: {bool(TELEGRAM_CHAT_ID)}", flush=True)
-    threading.Thread(target=bot1_scan_binance_pump, daemon=True).start()
+    threading.Thread(target=bot1_scan_binance_spot, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
