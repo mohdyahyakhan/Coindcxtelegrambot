@@ -214,40 +214,41 @@ def bot2_supertrend_short():
             for symbol, info in WATCHLIST.items():
                 if time.time() - info['time'] > WATCHLIST_DAYS * 86400:
                     to_remove.append(symbol)
-                    print(f"Bot2: Removing {symbol} - 2 days over", flush=True)
                     continue
 
                 df = get_klines(symbol)
-                if df is None or len(df) < EMA_PERIOD:
+                if df is None or len(df) < EMA_PERIOD + 2:
                     continue
 
                 df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
 
-                current_st = df['supertrend'].iloc[-1] # True=Green, False=Red
-                prev_st = df['supertrend'].iloc[-2]
-                current_ema = df['ema300'].iloc[-1]
-                current_close = df['close'].iloc[-1]
-                prev_close = df['close'].iloc[-2]
+                # Current values
+                st_value = df['final_upperband'].iloc[-1] if not df['supertrend'].iloc[-1] else df['final_lowerband'].iloc[-1]
+                st_value_prev = df['final_upperband'].iloc[-2] if not df['supertrend'].iloc[-2] else df['final_lowerband'].iloc[-2]
+
+                ema300 = df['ema300'].iloc[-1]
+                ema300_prev = df['ema300'].iloc[-2]
+                is_st_red = not df['supertrend'].iloc[-1] # False = Red
+
+                # EXACT CROSS: ST ne EMA300 ko upar se neeche kata + ST Red
+                st_crossed_below_ema = st_value < ema300 and st_value_prev > ema300_prev
 
                 cdcx_name = symbol.replace('USDT', '-USDT')
 
-                # SHORT CONDITION: Supertrend Red + Price below EMA300 + Naya flip
-                if not current_st and current_close < current_ema:
-                    # Naya cross hua hai kya check karo
-                    if prev_st or prev_close > current_ema:
-                        if info['last_st']!= 'short':
-                            msg = f"🔻 <b>BOT 2: SHORT SIGNAL</b> 🔻\n\n" \
-                                  f"<b>Coin:</b> {cdcx_name}\n" \
-                                  f"<b>Setup:</b> Supertrend(10,3) RED + Below EMA(300)\n" \
-                                  f"<b>Timeframe:</b> 5min\n" \
-                                  f"<b>Price:</b> ${current_close:.6f}\n" \
-                                  f"<b>EMA300:</b> ${current_ema:.6f}\n" \
-                                  f"<b>ST Level:</b> ${df['final_upperband'].iloc[-1]:.6f}\n\n" \
-                                  f"CoinDCX Futures pe SHORT consider karo.\n" \
-                                  f"SL: Supertrend ke upar ya recent high"
-                            send_telegram(msg)
-                            WATCHLIST[symbol]['last_st'] = 'short'
-                            print(f"Bot2 SHORT Alert: {cdcx_name}", flush=True)
+                if st_crossed_below_ema and is_st_red:
+                    if info['last_st']!= 'short':
+                        msg = f"🔻 <b>BOT 2: SHORT SIGNAL</b> 🔻\n\n" \
+                              f"<b>Coin:</b> {cdcx_name}\n" \
+                              f"<b>Setup:</b> Supertrend(10,3) crossed BELOW EMA(300)\n" \
+                              f"<b>Timeframe:</b> 5min\n" \
+                              f"<b>ST Value:</b> ${st_value:.6f}\n" \
+                              f"<b>EMA300:</b> ${ema300:.6f}\n" \
+                              f"<b>Price:</b> ${df['close'].iloc[-1]:.6f}\n\n" \
+                              f"CoinDCX Futures pe SHORT entry zone.\n" \
+                              f"SL: ${st_value:.6f} ke upar ya recent high"
+                        send_telegram(msg)
+                        WATCHLIST[symbol]['last_st'] = 'short'
+                        print(f"Bot2 SHORT Cross Alert: {cdcx_name}", flush=True)
                 else:
                     WATCHLIST[symbol]['last_st'] = 'long'
 
@@ -259,7 +260,7 @@ def bot2_supertrend_short():
         except Exception as e:
             print(f"Bot2 Error: {e}", flush=True)
 
-        time.sleep(120)
+        time.sleep(120) # 2 min me check
 @app.route('/')
 def home():
     return f"Bot running. Watchlist: {len(WATCHLIST)} coins. CoinDCX Filter: ON"
