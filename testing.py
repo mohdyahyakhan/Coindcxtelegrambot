@@ -200,15 +200,15 @@ def bot1_scan_bybit_futures():
 
         time.sleep(300) # Har 5 min me check
 
-def bot2_supertrend_exit():
-    print("Bot2 Supertrend thread started", flush=True)
+def bot2_supertrend_short():
+    print("Bot2 Supertrend SHORT thread started", flush=True)
     while True:
         try:
             if not WATCHLIST:
                 time.sleep(60)
                 continue
 
-            print(f"Bot2: Monitoring {len(WATCHLIST)} coins for Supertrend", flush=True)
+            print(f"Bot2: Monitoring {len(WATCHLIST)} coins for SHORT signal", flush=True)
             to_remove = []
 
             for symbol, info in WATCHLIST.items():
@@ -223,7 +223,7 @@ def bot2_supertrend_exit():
 
                 df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
 
-                current_st = df['supertrend'].iloc[-1]
+                current_st = df['supertrend'].iloc[-1] # True=Green, False=Red
                 prev_st = df['supertrend'].iloc[-2]
                 current_ema = df['ema300'].iloc[-1]
                 current_close = df['close'].iloc[-1]
@@ -231,22 +231,25 @@ def bot2_supertrend_exit():
 
                 cdcx_name = symbol.replace('USDT', '-USDT')
 
-                # Condition: Supertrend red + Price below EMA300 + Naya cross
+                # SHORT CONDITION: Supertrend Red + Price below EMA300 + Naya flip
                 if not current_st and current_close < current_ema:
+                    # Naya cross hua hai kya check karo
                     if prev_st or prev_close > current_ema:
-                        if info['last_st']!= 'down':
-                            msg = f"🔻 <b>BOT 2: SUPERTREND EXIT</b> 🔻\n\n" \
+                        if info['last_st']!= 'short':
+                            msg = f"🔻 <b>BOT 2: SHORT SIGNAL</b> 🔻\n\n" \
                                   f"<b>Coin:</b> {cdcx_name}\n" \
-                                  f"<b>Reason:</b> Supertrend(10,3) crossed below EMA(300)\n" \
+                                  f"<b>Setup:</b> Supertrend(10,3) RED + Below EMA(300)\n" \
                                   f"<b>Timeframe:</b> 5min\n" \
                                   f"<b>Price:</b> ${current_close:.6f}\n" \
-                                  f"<b>EMA300:</b> ${current_ema:.6f}\n\n" \
-                                  f"CoinDCX pe listed. Exit consider karo."
+                                  f"<b>EMA300:</b> ${current_ema:.6f}\n" \
+                                  f"<b>ST Level:</b> ${df['final_upperband'].iloc[-1]:.6f}\n\n" \
+                                  f"CoinDCX Futures pe SHORT consider karo.\n" \
+                                  f"SL: Supertrend ke upar ya recent high"
                             send_telegram(msg)
-                            WATCHLIST[symbol]['last_st'] = 'down'
-                            print(f"Bot2 EXIT Alert: {cdcx_name}", flush=True)
+                            WATCHLIST[symbol]['last_st'] = 'short'
+                            print(f"Bot2 SHORT Alert: {cdcx_name}", flush=True)
                 else:
-                    WATCHLIST[symbol]['last_st'] = 'up'
+                    WATCHLIST[symbol]['last_st'] = 'long'
 
                 time.sleep(1)
 
@@ -257,7 +260,6 @@ def bot2_supertrend_exit():
             print(f"Bot2 Error: {e}", flush=True)
 
         time.sleep(120)
-
 @app.route('/')
 def home():
     return f"Bot running. Watchlist: {len(WATCHLIST)} coins. CoinDCX Filter: ON"
@@ -267,5 +269,5 @@ if __name__ == '__main__':
     print(f"CHAT_ID exists: {bool(TELEGRAM_CHAT_ID)}", flush=True)
     print(f"CoinDCX Futures loaded: {len(COINDX_FUTURES)} pairs", flush=True)
     threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
-    threading.Thread(target=bot2_supertrend_exit, daemon=True).start()
+    threading.Thread(target=bot2_supertrend_short, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
