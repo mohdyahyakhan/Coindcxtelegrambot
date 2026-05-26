@@ -5,6 +5,7 @@ from flask import Flask
 import threading
 import pandas as pd
 import numpy as np
+import json
 
 app = Flask(__name__)
 
@@ -13,6 +14,7 @@ WATCHLIST_DAYS = 2 # 2 din tak monitor
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
+WATCHLIST_FILE = "watchlist.json" # FIX 1: File me save
 
 # CoinDCX Futures List - Teri di hui list
 COINDX_FUTURES = {
@@ -86,6 +88,28 @@ WATCHLIST = {} # {'BSBUSDT': {'time': 123456, 'last_st': None}}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 
+# ===== FIX 1: WATCHLIST SAVE/LOAD FUNCTIONS =====
+def load_watchlist():
+    global WATCHLIST
+    try:
+        if os.path.exists(WATCHLIST_FILE):
+            with open(WATCHLIST_FILE, 'r') as f:
+                WATCHLIST = json.load(f)
+                print(f"Loaded {len(WATCHLIST)} coins from watchlist.json", flush=True)
+        else:
+            WATCHLIST = {}
+    except Exception as e:
+        print(f"Load watchlist error: {e}", flush=True)
+        WATCHLIST = {}
+
+def save_watchlist():
+    try:
+        with open(WATCHLIST_FILE, 'w') as f:
+            json.dump(WATCHLIST, f)
+    except Exception as e:
+        print(f"Save watchlist error: {e}", flush=True)
+# ================================================
+
 def send_telegram(msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
@@ -140,7 +164,7 @@ def get_klines(symbol, interval='5', limit=350):
         if res['retCode'] == 0:
             data = res['result']['list']
             df = pd.DataFrame(data, columns=['timestamp','open','high','low','close','volume','turnover'])
-            df = df.astype({'open': float, 'high': float, 'low': float, 'close': float})
+            df = df.astype({'timestamp': 'int64', 'open': float, 'high': float, 'low': float, 'close': float})
             df = df.iloc[::-1].reset_index(drop=True)
             return df
     except Exception as e:
@@ -181,6 +205,7 @@ def bot1_scan_bybit_futures():
                         'time': time.time(),
                         'last_st': None
                     }
+                    save_watchlist() # FIX 1: Save kar de turant
                     cdcx_name = symbol.replace('USDT', '-USDT')
                     price = ticker['lastPrice']
                     msg = f"🚨 <b>BOT 1: 24H PUMP ALERT</b> 🚨\n\n" \
@@ -211,7 +236,7 @@ def bot2_supertrend_short():
             print(f"Bot2: Monitoring {len(WATCHLIST)} coins for SHORT signal", flush=True)
             to_remove = []
 
-            for symbol, info in WATCHLIST.items():
+            for symbol, info in list(WATCHLIST.items()):
                 if time.time() - info['time'] > WATCHLIST_DAYS * 86400:
                     to_remove.append(symbol)
                     continue
@@ -219,6 +244,14 @@ def bot2_supertrend_short():
                 df = get_klines(symbol)
                 if df is None or len(df) < EMA_PERIOD + 2:
                     continue
+
+                # ===== FIX 2: CANDLE CLOSE CHECK =====
+                last_candle_time = df['timestamp'].iloc[-1]
+                # Agar candle abhi close nahi hui - 5min = 300000ms
+                if time.time() * 1000 - last_candle_time < 295000: # 5sec buffer
+                    print(f"Bot2: Skipping {symbol}, candle not closed yet", flush=True)
+                    continue
+                # =====================================
 
                 df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
 
@@ -236,7 +269,7 @@ def bot2_supertrend_short():
                 cdcx_name = symbol.replace('USDT', '-USDT')
 
                 if st_crossed_below_ema and is_st_red:
-                    if info['last_st']!= 'short':
+                    if info.get('last_st')!= 'short':
                         msg = f"🔻 <b>BOT 2: SHORT SIGNAL</b> 🔻\n\n" \
                               f"<b>Coin:</b> {cdcx_name}\n" \
                               f"<b>Setup:</b> Supertrend(10,3) crossed BELOW EMA(300)\n" \
@@ -248,19 +281,24 @@ def bot2_supertrend_short():
                               f"SL: ${st_value:.6f} ke upar ya recent high"
                         send_telegram(msg)
                         WATCHLIST[symbol]['last_st'] = 'short'
+                        save_watchlist() # FIX 1: Update ke baad save
                         print(f"Bot2 SHORT Cross Alert: {cdcx_name}", flush=True)
                 else:
-                    WATCHLIST[symbol]['last_st'] = 'long'
+                    if info.get('last_st')!= 'long':
+                        WATCHLIST[symbol]['last_st'] = 'long'
+                        save_watchlist() # FIX 1: Save
 
                 time.sleep(1)
 
             for symbol in to_remove:
                 WATCHLIST.pop(symbol, None)
+                save_watchlist() # FIX 1: Remove ke baad save
 
         except Exception as e:
             print(f"Bot2 Error: {e}", flush=True)
 
         time.sleep(120) # 2 min me check
+
 @app.route('/')
 def home():
     return f"Bot running. Watchlist: {len(WATCHLIST)} coins. CoinDCX Filter: ON"
@@ -269,6 +307,9 @@ if __name__ == '__main__':
     print(f"BOT_TOKEN exists: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
     print(f"CHAT_ID exists: {bool(TELEGRAM_CHAT_ID)}", flush=True)
     print(f"CoinDCX Futures loaded: {len(COINDX_FUTURES)} pairs", flush=True)
+
+    load_watchlist() # FIX 1: Start me load kar
+
     threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
