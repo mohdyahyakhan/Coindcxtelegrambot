@@ -1,7 +1,7 @@
 import requests
 import time
 import os
-from flask import Flask
+from flask import Flask, jsonify
 import threading
 import pandas as pd
 import numpy as np
@@ -302,6 +302,10 @@ def bot2_supertrend_short():
 @app.route('/')
 def home():
     return f"Bot running. Watchlist: {len(WATCHLIST)} coins. CoinDCX Filter: ON"
+
+@app.route('/watchlist')
+def show_watchlist():
+    return jsonify(WATCHLIST)  # Yaha jsonify() lagana zaruri hai
 
 if __name__ == '__main__':
     print(f"BOT_TOKEN exists: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
