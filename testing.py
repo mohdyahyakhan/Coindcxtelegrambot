@@ -14,12 +14,11 @@ WATCHLIST_DAYS = 2 # 2 din tak monitor
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
-WATCHLIST_FILE = "watchlist.json" # FIX 1: File me save
+WATCHLIST_FILE = "watchlist.json"
 
-# CoinDCX Futures List - Teri di hui list
 COINDX_FUTURES = {
     '0GUSDT', '00000MOGUSDT', '00BONKUSDT', '00CATUSDT', '00FLOKIUSDT',
-    '00LUNCUSDT', '00PEPEUSDT', '00RATSUSDT', '00SATSUSDT', '00SHIBUSDT',
+    '00LUNCUSDT', '00PEUSDT', '00RATSUSDT', '00SATSUSDT', '00SHIBUSDT',
     '1INCHUSDT', '1MBABYDOGEUSDT', '2ZUSDT', 'AUSDT', 'AAVEUSDT', 'ACEUSDT',
     'ACHUSDT', 'ACTUSDT', 'ACUUSDT', 'ACXUSDT', 'ADAUSDT', 'AEROUSDT', 'AEVOUSDT',
     'AGLDUSDT', 'AIGENSYNUSDT', 'AIXBTUSDT', 'AKTUSDT', 'ALCHUSDT', 'ALGOUSDT',
@@ -84,11 +83,10 @@ COINDX_FUTURES = {
     'ZKCUSDT', 'ZKPUSDT', 'ZROUSDT', 'ZRXUSDT'
 }
 
-WATCHLIST = {} # {'BSBUSDT': {'time': 123456, 'last_st': None}}
+WATCHLIST = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 
-# ===== FIX 1: WATCHLIST SAVE/LOAD FUNCTIONS =====
 def load_watchlist():
     global WATCHLIST
     try:
@@ -108,7 +106,6 @@ def save_watchlist():
             json.dump(WATCHLIST, f)
     except Exception as e:
         print(f"Save watchlist error: {e}", flush=True)
-# ================================================
 
 def send_telegram(msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -116,7 +113,7 @@ def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     try:
-        requests.post(url, data=data, timeout=)
+        requests.post(url, data=data, timeout=10) # FIX: timeout value added
     except Exception as e:
         print(f"Telegram Error: {e}", flush=True)
 
@@ -140,13 +137,18 @@ def calculate_supertrend(df, period=10, multiplier=3):
             df.loc[df.index[i], 'final_lowerband'] = max(df['lowerband'].iloc[i], df['final_lowerband'].iloc[i-1])
 
     df['supertrend'] = True
+    df['st_line'] = 0.0 # FIX: Actual ST line track karne ke liye
+
     for i in range(1, len(df)):
         if df['close'].iloc[i] <= df['final_lowerband'].iloc[i]:
             df.loc[df.index[i], 'supertrend'] = False
+            df.loc[df.index[i], 'st_line'] = df['final_lowerband'].iloc[i]
         elif df['close'].iloc[i] >= df['final_upperband'].iloc[i]:
             df.loc[df.index[i], 'supertrend'] = True
+            df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
         else:
             df.loc[df.index[i], 'supertrend'] = df['supertrend'].iloc[i-1]
+            df.loc[df.index[i], 'st_line'] = df['st_line'].iloc[i-1]
 
     df['ema300'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     return df
@@ -191,21 +193,18 @@ def bot1_scan_bybit_futures():
 
             for ticker in tickers:
                 symbol = ticker['symbol']
-
-                # CoinDCX Filter
                 if symbol not in COINDX_FUTURES:
                     continue
 
                 cdcx_count += 1
                 change_24h = float(ticker['price24hPcnt']) * 100
 
-                # YAHI MAIN CHANGE HAI: 24h Change >= 40%
                 if symbol not in WATCHLIST and change_24h >= PUMP_PERCENT_24H:
                     WATCHLIST[symbol] = {
                         'time': time.time(),
                         'last_st': None
                     }
-                    save_watchlist() # FIX 1: Save kar de turant
+                    save_watchlist()
                     cdcx_name = symbol.replace('USDT', '-USDT')
                     price = ticker['lastPrice']
                     msg = f"🚨 <b>BOT 1: 24H PUMP ALERT</b> 🚨\n\n" \
@@ -213,7 +212,7 @@ def bot1_scan_bybit_futures():
                           f"<b>24h Change:</b> {change_24h:.2f}%\n" \
                           f"<b>Price:</b> ${price}\n" \
                           f"<b>Exchange:</b> CoinDCX Listed\n" \
-                          f"<b>Source:</b> Bybit Futures\n\n" \
+                          f"<b>Source:</b> Bybit Futures\n" \
                           f"Added to Bot2 watchlist for {WATCHLIST_DAYS} days."
                     send_telegram(msg)
                     print(f"Bot1 Alert: {cdcx_name} {change_24h:.2f}%", flush=True)
@@ -223,7 +222,7 @@ def bot1_scan_bybit_futures():
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
 
-        time.sleep(300) # Har 5 min me check
+        time.sleep(300)
 
 def bot2_supertrend_short():
     print("Bot2 Supertrend SHORT thread started", flush=True)
@@ -245,26 +244,22 @@ def bot2_supertrend_short():
                 if df is None or len(df) < EMA_PERIOD + 2:
                     continue
 
-                # ===== FIX 2: CANDLE CLOSE CHECK =====
                 last_candle_time = df['timestamp'].iloc[-1]
-                # Agar candle abhi close nahi hui - 5min = 300000ms
-                if time.time() * 1000 - last_candle_time < 295000: # 5sec buffer
+                if time.time() * 1000 - last_candle_time < 295000:
                     print(f"Bot2: Skipping {symbol}, candle not closed yet", flush=True)
                     continue
-                # =====================================
 
                 df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
 
-                # Current values
-                st_value = df['final_upperband'].iloc[-1] if not df['supertrend'].iloc[-1] else df['final_lowerband'].iloc[-1]
-                st_value_prev = df['final_upperband'].iloc[-2] if not df['supertrend'].iloc[-2] else df['final_lowerband'].iloc[-2]
-
+                # FIX: Ab ST line consistent hai
+                st_line = df['st_line'].iloc[-1]
+                st_line_prev = df['st_line'].iloc[-2]
                 ema300 = df['ema300'].iloc[-1]
                 ema300_prev = df['ema300'].iloc[-2]
-                is_st_red = not df['supertrend'].iloc[-1] # False = Red
+                is_st_red = not df['supertrend'].iloc[-1]
 
                 # EXACT CROSS: ST ne EMA300 ko upar se neeche kata + ST Red
-                st_crossed_below_ema = st_value < ema300 and st_value_prev > ema300_prev
+                st_crossed_below_ema = st_line < ema300 and st_line_prev > ema300_prev
 
                 cdcx_name = symbol.replace('USDT', '-USDT')
 
@@ -274,30 +269,30 @@ def bot2_supertrend_short():
                               f"<b>Coin:</b> {cdcx_name}\n" \
                               f"<b>Setup:</b> Supertrend(10,3) crossed BELOW EMA(300)\n" \
                               f"<b>Timeframe:</b> 5min\n" \
-                              f"<b>ST Value:</b> ${st_value:.6f}\n" \
+                              f"<b>ST Value:</b> ${st_line:.6f}\n" \
                               f"<b>EMA300:</b> ${ema300:.6f}\n" \
                               f"<b>Price:</b> ${df['close'].iloc[-1]:.6f}\n\n" \
                               f"CoinDCX Futures pe SHORT entry zone.\n" \
-                              f"SL: ${st_value:.6f} ke upar ya recent high"
+                              f"SL: ${st_line:.6f} ke upar ya recent high"
                         send_telegram(msg)
                         WATCHLIST[symbol]['last_st'] = 'short'
-                        save_watchlist() # FIX 1: Update ke baad save
+                        save_watchlist()
                         print(f"Bot2 SHORT Cross Alert: {cdcx_name}", flush=True)
                 else:
                     if info.get('last_st')!= 'long':
                         WATCHLIST[symbol]['last_st'] = 'long'
-                        save_watchlist() # FIX 1: Save
+                        save_watchlist()
 
                 time.sleep(1)
 
             for symbol in to_remove:
                 WATCHLIST.pop(symbol, None)
-                save_watchlist() # FIX 1: Remove ke baad save
+                save_watchlist()
 
         except Exception as e:
             print(f"Bot2 Error: {e}", flush=True)
 
-        time.sleep(120) # 2 min me check
+        time.sleep(120)
 
 @app.route('/')
 def home():
@@ -305,14 +300,14 @@ def home():
 
 @app.route('/watchlist')
 def show_watchlist():
-    return jsonify(WATCHLIST)  # Yaha jsonify() lagana zaruri hai
+    return jsonify(WATCHLIST)
 
 if __name__ == '__main__':
     print(f"BOT_TOKEN exists: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
     print(f"CHAT_ID exists: {bool(TELEGRAM_CHAT_ID)}", flush=True)
     print(f"CoinDCX Futures loaded: {len(COINDX_FUTURES)} pairs", flush=True)
 
-    load_watchlist() # FIX 1: Start me load kar
+    load_watchlist()
 
     threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
