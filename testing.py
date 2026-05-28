@@ -9,11 +9,11 @@ import json
 
 app = Flask(__name__)
 
-PUMP_PERCENT_24H = 40 # Bot1 trigger - 24H Change
+PUMP_PERCENT_24H = 10 # Bot1 trigger - 24H Change
 WATCHLIST_DAYS = 2 # 2 din tak monitor
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
-EMA_PERIOD = 300
+EMA_PERIOD = 21
 WATCHLIST_FILE = "watchlist.json"
 
 COINDX_FUTURES = {
