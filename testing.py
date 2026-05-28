@@ -9,7 +9,7 @@ import json
 
 app = Flask(__name__)
 
-PUMP_PERCENT_24H = 10 # Bot1 trigger - 24H Change
+PUMP_PERCENT_24H = 40 # Bot1 trigger - 24H Change
 WATCHLIST_DAYS = 2 # 2 din tak monitor
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
@@ -18,8 +18,8 @@ WATCHLIST_FILE = "watchlist.json" # FIX 1: File me save
 
 # CoinDCX Futures List - Teri di hui list
 COINDX_FUTURES = {
-    '0GUSDT', '1000000MOGUSDT', '1000BONKUSDT', '1000CATUSDT', '1000FLOKIUSDT',
-    '1000LUNCUSDT', '1000PEPEUSDT', '1000RATSUSDT', '1000SATSUSDT', '1000SHIBUSDT',
+    '0GUSDT', '00000MOGUSDT', '00BONKUSDT', '00CATUSDT', '00FLOKIUSDT',
+    '00LUNCUSDT', '00PEPEUSDT', '00RATSUSDT', '00SATSUSDT', '00SHIBUSDT',
     '1INCHUSDT', '1MBABYDOGEUSDT', '2ZUSDT', 'AUSDT', 'AAVEUSDT', 'ACEUSDT',
     'ACHUSDT', 'ACTUSDT', 'ACUUSDT', 'ACXUSDT', 'ADAUSDT', 'AEROUSDT', 'AEVOUSDT',
     'AGLDUSDT', 'AIGENSYNUSDT', 'AIXBTUSDT', 'AKTUSDT', 'ALCHUSDT', 'ALGOUSDT',
@@ -116,7 +116,7 @@ def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     try:
-        requests.post(url, data=data, timeout=10)
+        requests.post(url, data=data, timeout=)
     except Exception as e:
         print(f"Telegram Error: {e}", flush=True)
 
@@ -199,7 +199,7 @@ def bot1_scan_bybit_futures():
                 cdcx_count += 1
                 change_24h = float(ticker['price24hPcnt']) * 100
 
-                # YAHI MAIN CHANGE HAI: 24h Change >= 10%
+                # YAHI MAIN CHANGE HAI: 24h Change >= 40%
                 if symbol not in WATCHLIST and change_24h >= PUMP_PERCENT_24H:
                     WATCHLIST[symbol] = {
                         'time': time.time(),
