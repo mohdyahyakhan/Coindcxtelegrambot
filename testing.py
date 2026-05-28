@@ -9,7 +9,7 @@ import json
 
 app = Flask(__name__)
 
-PUMP_PERCENT_24H = 40 # Bot1 trigger - 24H Change
+PUMP_PERCENT_24H = 20 # Bot1 trigger - 24H Change
 WATCHLIST_DAYS = 2 # 2 din tak monitor
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
@@ -199,7 +199,7 @@ def bot1_scan_bybit_futures():
                 cdcx_count += 1
                 change_24h = float(ticker['price24hPcnt']) * 100
 
-                # YAHI MAIN CHANGE HAI: 24h Change >= 40%
+                # YAHI MAIN CHANGE HAI: 24h Change >= 20%
                 if symbol not in WATCHLIST and change_24h >= PUMP_PERCENT_24H:
                     WATCHLIST[symbol] = {
                         'time': time.time(),
