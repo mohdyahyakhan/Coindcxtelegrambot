@@ -89,11 +89,23 @@ TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 
 def load_watchlist():
     global WATCHLIST
+    current_config = {
+        'pump': PUMP_PERCENT_24H,
+        'ema': EMA_PERIOD,
+        'days': WATCHLIST_DAYS
+    }
     try:
         if os.path.exists(WATCHLIST_FILE):
             with open(WATCHLIST_FILE, 'r') as f:
-                WATCHLIST = json.load(f)
-                print(f"Loaded {len(WATCHLIST)} coins from watchlist.json", flush=True)
+                data = json.load(f)
+                saved_config = data.get('_config', {})
+                if saved_config!= current_config:
+                    print(f"Config changed. Old: {saved_config} New: {current_config}. Clearing watchlist.", flush=True)
+                    WATCHLIST = {}
+                    save_watchlist()
+                else:
+                    WATCHLIST = data.get('coins', {})
+                    print(f"Loaded {len(WATCHLIST)} coins from watchlist.json", flush=True)
         else:
             WATCHLIST = {}
     except Exception as e:
@@ -102,8 +114,16 @@ def load_watchlist():
 
 def save_watchlist():
     try:
+        data = {
+            '_config': {
+                'pump': PUMP_PERCENT_24H,
+                'ema': EMA_PERIOD,
+                'days': WATCHLIST_DAYS
+            },
+            'coins': WATCHLIST
+        }
         with open(WATCHLIST_FILE, 'w') as f:
-            json.dump(WATCHLIST, f)
+            json.dump(data, f)
     except Exception as e:
         print(f"Save watchlist error: {e}", flush=True)
 
@@ -139,7 +159,6 @@ def calculate_supertrend(df, period=10, multiplier=3):
             df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
             continue
 
-        # Final bands
         if df['upperband'].iloc[i] < df['final_upperband'].iloc[i-1] or df['close'].iloc[i-1] > df['final_upperband'].iloc[i-1]:
             df.loc[df.index[i], 'final_upperband'] = df['upperband'].iloc[i]
         else:
@@ -150,7 +169,6 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else:
             df.loc[df.index[i], 'final_lowerband'] = df['final_lowerband'].iloc[i-1]
 
-        # Supertrend direction
         if df['supertrend'].iloc[i-1] == True and df['close'].iloc[i] < df['final_lowerband'].iloc[i]:
             df.loc[df.index[i], 'supertrend'] = False
         elif df['supertrend'].iloc[i-1] == False and df['close'].iloc[i] > df['final_upperband'].iloc[i]:
@@ -158,7 +176,6 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else:
             df.loc[df.index[i], 'supertrend'] = df['supertrend'].iloc[i-1]
 
-        # ST Line value
         if df['supertrend'].iloc[i]:
             df.loc[df.index[i], 'st_line'] = df['final_lowerband'].iloc[i]
         else:
