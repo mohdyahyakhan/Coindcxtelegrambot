@@ -150,7 +150,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
             df.loc[df.index[i], 'supertrend'] = df['supertrend'].iloc[i-1]
             df.loc[df.index[i], 'st_line'] = df['st_line'].iloc[i-1]
 
-    df['ema300'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
+    df['ema_val'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean() # FIX: ema300 -> ema_val
     return df
 
 def get_klines(symbol, interval='5', limit=350):
@@ -202,7 +202,7 @@ def bot1_scan_bybit_futures():
                 if symbol not in WATCHLIST and change_24h >= PUMP_PERCENT_24H:
                     WATCHLIST[symbol] = {
                         'time': time.time(),
-                        'cross_count': 0 # FIX: Cross counter add kiya
+                        'cross_count': 0
                     }
                     save_watchlist()
                     cdcx_name = symbol.replace('USDT', '-USDT')
@@ -245,7 +245,7 @@ def bot2_supertrend_short():
                     continue
 
                 last_candle_time = df['timestamp'].iloc[-1]
-                if time.time() * 1000 - last_candle_time < 10000: # FIX: 295000 se 10000 kiya
+                if time.time() * 1000 - last_candle_time < 10000:
                     print(f"Bot2: Skipping {symbol}, candle not closed yet", flush=True)
                     continue
 
@@ -253,8 +253,8 @@ def bot2_supertrend_short():
 
                 st_line = df['st_line'].iloc[-1]
                 st_line_prev = df['st_line'].iloc[-2]
-                ema_val = df['ema300'].iloc[-1]
-                ema_prev = df['ema300'].iloc[-2]
+                ema_val = df['ema_val'].iloc[-1] # FIX: ema300 -> ema_val
+                ema_prev = df['ema_val'].iloc[-2]
                 is_st_red = not df['supertrend'].iloc[-1]
 
                 st_crossed_below_ema = st_line < ema_val and st_line_prev > ema_prev
@@ -262,7 +262,10 @@ def bot2_supertrend_short():
 
                 if st_crossed_below_ema and is_st_red:
                     cross_count = info.get('cross_count', 0)
-                    if cross_count < 3: # FIX: Max 3 alert
+                    # DEBUG: Logs me exact value dikhega
+                    print(f"DEBUG {cdcx_name}: ST={st_line:.6f} EMA={ema_val:.6f} PrevST={st_line_prev:.6f} PrevEMA={ema_prev:.6f}", flush=True)
+
+                    if cross_count < 3:
                         msg = f"🔻 <b>BOT 2: SHORT SIGNAL #{cross_count+1}</b> 🔻\n\n" \
                               f"<b>Coin:</b> {cdcx_name}\n" \
                               f"<b>Setup:</b> ST(10,3) crossed BELOW EMA({EMA_PERIOD})\n" \
