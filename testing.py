@@ -124,33 +124,47 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
     df['atr'] = df['tr'].rolling(period).mean()
 
-    df['upperband'] = (df['high'] + df['low']) / 2 + multiplier * df['atr']
-    df['lowerband'] = (df['high'] + df['low']) / 2 - multiplier * df['atr']
+    df['upperband'] = ((df['high'] + df['low']) / 2) + (multiplier * df['atr'])
+    df['lowerband'] = ((df['high'] + df['low']) / 2) - (multiplier * df['atr'])
 
-    df['final_upperband'] = df['upperband']
-    df['final_lowerband'] = df['lowerband']
-
-    for i in range(1, len(df)):
-        if df['close'].iloc[i-1] <= df['final_upperband'].iloc[i-1]:
-            df.loc[df.index[i], 'final_upperband'] = min(df['upperband'].iloc[i], df['final_upperband'].iloc[i-1])
-        if df['close'].iloc[i-1] >= df['final_lowerband'].iloc[i-1]:
-            df.loc[df.index[i], 'final_lowerband'] = max(df['lowerband'].iloc[i], df['final_lowerband'].iloc[i-1])
-
+    df['final_upperband'] = 0.0
+    df['final_lowerband'] = 0.0
     df['supertrend'] = True
     df['st_line'] = 0.0
 
-    for i in range(1, len(df)):
-        if df['close'].iloc[i] <= df['final_lowerband'].iloc[i]:
-            df.loc[df.index[i], 'supertrend'] = False
-            df.loc[df.index[i], 'st_line'] = df['final_lowerband'].iloc[i]
-        elif df['close'].iloc[i] >= df['final_upperband'].iloc[i]:
-            df.loc[df.index[i], 'supertrend'] = True
+    for i in range(len(df)):
+        if i == 0:
+            df.loc[df.index[i], 'final_upperband'] = df['upperband'].iloc[i]
+            df.loc[df.index[i], 'final_lowerband'] = df['lowerband'].iloc[i]
             df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
+            continue
+
+        # Final bands
+        if df['upperband'].iloc[i] < df['final_upperband'].iloc[i-1] or df['close'].iloc[i-1] > df['final_upperband'].iloc[i-1]:
+            df.loc[df.index[i], 'final_upperband'] = df['upperband'].iloc[i]
+        else:
+            df.loc[df.index[i], 'final_upperband'] = df['final_upperband'].iloc[i-1]
+
+        if df['lowerband'].iloc[i] > df['final_lowerband'].iloc[i-1] or df['close'].iloc[i-1] < df['final_lowerband'].iloc[i-1]:
+            df.loc[df.index[i], 'final_lowerband'] = df['lowerband'].iloc[i]
+        else:
+            df.loc[df.index[i], 'final_lowerband'] = df['final_lowerband'].iloc[i-1]
+
+        # Supertrend direction
+        if df['supertrend'].iloc[i-1] == True and df['close'].iloc[i] < df['final_lowerband'].iloc[i]:
+            df.loc[df.index[i], 'supertrend'] = False
+        elif df['supertrend'].iloc[i-1] == False and df['close'].iloc[i] > df['final_upperband'].iloc[i]:
+            df.loc[df.index[i], 'supertrend'] = True
         else:
             df.loc[df.index[i], 'supertrend'] = df['supertrend'].iloc[i-1]
-            df.loc[df.index[i], 'st_line'] = df['st_line'].iloc[i-1]
 
-    df['ema_val'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean() # FIX: ema300 -> ema_val
+        # ST Line value
+        if df['supertrend'].iloc[i]:
+            df.loc[df.index[i], 'st_line'] = df['final_lowerband'].iloc[i]
+        else:
+            df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
+
+    df['ema_val'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     return df
 
 def get_klines(symbol, interval='5', limit=350):
@@ -253,7 +267,7 @@ def bot2_supertrend_short():
 
                 st_line = df['st_line'].iloc[-1]
                 st_line_prev = df['st_line'].iloc[-2]
-                ema_val = df['ema_val'].iloc[-1] # FIX: ema300 -> ema_val
+                ema_val = df['ema_val'].iloc[-1]
                 ema_prev = df['ema_val'].iloc[-2]
                 is_st_red = not df['supertrend'].iloc[-1]
 
@@ -262,7 +276,6 @@ def bot2_supertrend_short():
 
                 if st_crossed_below_ema and is_st_red:
                     cross_count = info.get('cross_count', 0)
-                    # DEBUG: Logs me exact value dikhega
                     print(f"DEBUG {cdcx_name}: ST={st_line:.6f} EMA={ema_val:.6f} PrevST={st_line_prev:.6f} PrevEMA={ema_prev:.6f}", flush=True)
 
                     if cross_count < 3:
