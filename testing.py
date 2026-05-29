@@ -113,7 +113,7 @@ def send_telegram(msg):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
     try:
-        requests.post(url, data=data, timeout=10) # FIX: timeout value added
+        requests.post(url, data=data, timeout=10)
     except Exception as e:
         print(f"Telegram Error: {e}", flush=True)
 
@@ -137,7 +137,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
             df.loc[df.index[i], 'final_lowerband'] = max(df['lowerband'].iloc[i], df['final_lowerband'].iloc[i-1])
 
     df['supertrend'] = True
-    df['st_line'] = 0.0 # FIX: Actual ST line track karne ke liye
+    df['st_line'] = 0.0
 
     for i in range(1, len(df)):
         if df['close'].iloc[i] <= df['final_lowerband'].iloc[i]:
@@ -202,7 +202,7 @@ def bot1_scan_bybit_futures():
                 if symbol not in WATCHLIST and change_24h >= PUMP_PERCENT_24H:
                     WATCHLIST[symbol] = {
                         'time': time.time(),
-                        'last_st': None
+                        'cross_count': 0 # FIX: Cross counter add kiya
                     }
                     save_watchlist()
                     cdcx_name = symbol.replace('USDT', '-USDT')
@@ -245,43 +245,38 @@ def bot2_supertrend_short():
                     continue
 
                 last_candle_time = df['timestamp'].iloc[-1]
-                if time.time() * 1000 - last_candle_time < 295000:
+                if time.time() * 1000 - last_candle_time < 10000: # FIX: 295000 se 10000 kiya
                     print(f"Bot2: Skipping {symbol}, candle not closed yet", flush=True)
                     continue
 
                 df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
 
-                # FIX: Ab ST line consistent hai
                 st_line = df['st_line'].iloc[-1]
                 st_line_prev = df['st_line'].iloc[-2]
-                ema300 = df['ema300'].iloc[-1]
-                ema300_prev = df['ema300'].iloc[-2]
+                ema_val = df['ema300'].iloc[-1]
+                ema_prev = df['ema300'].iloc[-2]
                 is_st_red = not df['supertrend'].iloc[-1]
 
-                # EXACT CROSS: ST ne EMA300 ko upar se neeche kata + ST Red
-                st_crossed_below_ema = st_line < ema300 and st_line_prev > ema300_prev
-
+                st_crossed_below_ema = st_line < ema_val and st_line_prev > ema_prev
                 cdcx_name = symbol.replace('USDT', '-USDT')
 
                 if st_crossed_below_ema and is_st_red:
-                    if info.get('last_st')!= 'short':
-                        msg = f"🔻 <b>BOT 2: SHORT SIGNAL</b> 🔻\n\n" \
+                    cross_count = info.get('cross_count', 0)
+                    if cross_count < 3: # FIX: Max 3 alert
+                        msg = f"🔻 <b>BOT 2: SHORT SIGNAL #{cross_count+1}</b> 🔻\n\n" \
                               f"<b>Coin:</b> {cdcx_name}\n" \
-                              f"<b>Setup:</b> Supertrend(10,3) crossed BELOW EMA(300)\n" \
+                              f"<b>Setup:</b> ST(10,3) crossed BELOW EMA({EMA_PERIOD})\n" \
+                              f"<b>Cross:</b> #{cross_count+1}/3\n" \
                               f"<b>Timeframe:</b> 5min\n" \
                               f"<b>ST Value:</b> ${st_line:.6f}\n" \
-                              f"<b>EMA300:</b> ${ema300:.6f}\n" \
+                              f"<b>EMA{EMA_PERIOD}:</b> ${ema_val:.6f}\n" \
                               f"<b>Price:</b> ${df['close'].iloc[-1]:.6f}\n\n" \
                               f"CoinDCX Futures pe SHORT entry zone.\n" \
                               f"SL: ${st_line:.6f} ke upar ya recent high"
                         send_telegram(msg)
-                        WATCHLIST[symbol]['last_st'] = 'short'
+                        WATCHLIST[symbol]['cross_count'] = cross_count + 1
                         save_watchlist()
-                        print(f"Bot2 SHORT Cross Alert: {cdcx_name}", flush=True)
-                else:
-                    if info.get('last_st')!= 'long':
-                        WATCHLIST[symbol]['last_st'] = 'long'
-                        save_watchlist()
+                        print(f"Bot2 SHORT Alert #{cross_count+1} for {cdcx_name}", flush=True)
 
                 time.sleep(1)
 
