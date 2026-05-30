@@ -323,53 +323,54 @@ def bot1_scan_bybit_futures():
 
 def bot2_supertrend_short():
     print("Bot2 Supertrend SHORT thread started", flush=True)
+
+    # 5 min candle = 300,000 ms
+    # Last candle timestamp Bybit mein candle OPEN time hoti hai
+    # Isliye agar current time - last_candle_open_time >= 290s matlab candle close ho gayi
+    CANDLE_CLOSE_THRESHOLD_MS = 290 * 1000  # 290 seconds
+
     while True:
         try:
             if not WATCHLIST:
-                print("Bot2: WATCHLIST EMPTY — koi coin nahi hai monitor karne ke liye", flush=True)
-                time.sleep(60)
+                print("Bot2: Watchlist empty, 30s wait...", flush=True)
+                time.sleep(30)
                 continue
 
-            print(f"\nBot2: ===== NEW CYCLE — {len(WATCHLIST)} coins check ho rahe hain =====", flush=True)
+            print(f"\nBot2: ===== NEW CYCLE — {len(WATCHLIST)} coins =====", flush=True)
             to_remove = []
 
             for symbol, info in list(WATCHLIST.items()):
                 cdcx_name = symbol.replace('USDT', '-USDT')
 
-                # ── CHECK 1: Watchlist expiry ──────────────────────────────
-                age_hours = (time.time() - info['time']) / 3600
+                # ── Watchlist expiry check ─────────────────────────────
                 if time.time() - info['time'] > WATCHLIST_DAYS * 86400:
-                    print(f"Bot2: [{cdcx_name}] SKIP — watchlist expire ho gaya ({age_hours:.1f}h)", flush=True)
+                    print(f"Bot2: [{cdcx_name}] Watchlist expire — remove", flush=True)
                     to_remove.append(symbol)
                     continue
 
-                print(f"\nBot2: [{cdcx_name}] Processing... (age: {age_hours:.1f}h, cross_count: {info.get('cross_count',0)})", flush=True)
-
-                # ── CHECK 2: Data fetch ────────────────────────────────────
+                # ── Data fetch ────────────────────────────────────────
                 df = get_klines(symbol)
-                if df is None:
-                    print(f"Bot2: [{cdcx_name}] SKIP — get_klines None return kiya (API error ya kam candles)", flush=True)
-                    continue
-                if len(df) < EMA_PERIOD + 2:
-                    print(f"Bot2: [{cdcx_name}] SKIP — sirf {len(df)} candles mili, {EMA_PERIOD+2} chahiye", flush=True)
+                if df is None or len(df) < EMA_PERIOD + 2:
+                    print(f"Bot2: [{cdcx_name}] SKIP — data nahi mila", flush=True)
                     continue
 
-                print(f"Bot2: [{cdcx_name}] {len(df)} candles mili ✓", flush=True)
+                # ── FIX: Sahi candle close check ──────────────────────
+                # Bybit mein timestamp = candle OPEN time (milliseconds)
+                # 5min candle close hogi jab current_time - open_time >= 290s
+                last_candle_open_ms = df['timestamp'].iloc[-1]
+                elapsed_ms = time.time() * 1000 - last_candle_open_ms
 
-                # ── CHECK 3: Candle close ──────────────────────────────────
-                last_candle_time = df['timestamp'].iloc[-1]
-                candle_age_sec   = (time.time() * 1000 - last_candle_time) / 1000
-                if candle_age_sec < 10:
-                    print(f"Bot2: [{cdcx_name}] SKIP — candle sirf {candle_age_sec:.1f}s purani hai, abhi close nahi hui", flush=True)
+                if elapsed_ms < CANDLE_CLOSE_THRESHOLD_MS:
+                    remaining = (CANDLE_CLOSE_THRESHOLD_MS - elapsed_ms) / 1000
+                    print(f"Bot2: [{cdcx_name}] SKIP — candle close nahi hui "
+                          f"({elapsed_ms/1000:.0f}s / 290s, {remaining:.0f}s baki)", flush=True)
                     continue
 
-                print(f"Bot2: [{cdcx_name}] Last candle age: {candle_age_sec:.1f}s ✓", flush=True)
-
-                # ── CHECK 4: Indicator calculation ────────────────────────
+                # ── Indicators ────────────────────────────────────────
                 try:
                     df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
                 except Exception as e:
-                    print(f"Bot2: [{cdcx_name}] ERROR — calculate_supertrend failed: {e}", flush=True)
+                    print(f"Bot2: [{cdcx_name}] Supertrend error: {e}", flush=True)
                     continue
 
                 st_line      = df['st_line'].iloc[-1]
@@ -377,49 +378,36 @@ def bot2_supertrend_short():
                 ema_val      = df['ema_val'].iloc[-1]
                 ema_prev     = df['ema_val'].iloc[-2]
                 close_price  = df['close'].iloc[-1]
-                cross_count  = info.get('cross_count', 0)
 
-                # ── CHECK 5: NaN check ────────────────────────────────────
+                # ── NaN check ─────────────────────────────────────────
                 import math
                 if any(math.isnan(v) for v in [st_line, st_line_prev, ema_val, ema_prev]):
-                    print(f"Bot2: [{cdcx_name}] SKIP — NaN value mili: ST={st_line} EMA={ema_val}", flush=True)
+                    print(f"Bot2: [{cdcx_name}] SKIP — NaN value", flush=True)
                     continue
 
-                # ── Full values log karo ──────────────────────────────────
-                st_position = "UPAR EMA" if st_line > ema_val else "NICHE EMA"
-                prev_position = "UPAR EMA" if st_line_prev > ema_prev else "NICHE EMA"
+                # ── Crossunder Logic ──────────────────────────────────
+                # Previous candle: ST EMA ke UPAR tha
+                # Current candle : ST EMA ke NICHE aa gaya
+                st_crossed_below_ema = (st_line_prev > ema_prev) and (st_line < ema_val)
+
+                st_pos      = "UPAR" if st_line > ema_val else "NICHE"
+                prev_st_pos = "UPAR" if st_line_prev > ema_prev else "NICHE"
 
                 print(
                     f"Bot2: [{cdcx_name}] "
                     f"Close={close_price:.6f} | "
-                    f"ST={st_line:.6f} ({st_position}) | "
+                    f"ST={st_line:.6f}({st_pos}) | "
                     f"EMA={ema_val:.6f} | "
-                    f"PrevST={st_line_prev:.6f} ({prev_position}) | "
-                    f"PrevEMA={ema_prev:.6f}",
+                    f"PrevST={st_line_prev:.6f}({prev_st_pos}) | "
+                    f"CROSS={st_crossed_below_ema}",
                     flush=True
                 )
 
-                # ── CHECK 6: Cross condition ──────────────────────────────
-                prev_above = st_line_prev > ema_prev
-                curr_below = st_line < ema_val
-                st_crossed_below_ema = prev_above and curr_below
-
-                print(
-                    f"Bot2: [{cdcx_name}] "
-                    f"prev_above={prev_above} | curr_below={curr_below} | "
-                    f"CROSS={st_crossed_below_ema} | cross_count={cross_count}",
-                    flush=True
-                )
-
-                if not prev_above:
-                    print(f"Bot2: [{cdcx_name}] NO CROSS — PrevST already EMA ke niche tha", flush=True)
-                elif not curr_below:
-                    print(f"Bot2: [{cdcx_name}] NO CROSS — CurrentST abhi bhi EMA ke upar hai", flush=True)
-
-                # ── CHECK 7: Alert send ───────────────────────────────────
                 if st_crossed_below_ema:
+                    cross_count = info.get('cross_count', 0)
+
                     if cross_count >= 3:
-                        print(f"Bot2: [{cdcx_name}] CROSS DETECTED but cross_count={cross_count} >= 3, alert nahi bheja", flush=True)
+                        print(f"Bot2: [{cdcx_name}] Cross detected but limit 3/3 reach — skip", flush=True)
                     else:
                         msg = (
                             f"🔻 <b>BOT 2: SHORT SIGNAL #{cross_count + 1}</b> 🔻\n\n"
@@ -436,7 +424,7 @@ def bot2_supertrend_short():
                         send_telegram(msg)
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
                         save_watchlist()
-                        print(f"Bot2: [{cdcx_name}] ✅ SHORT ALERT #{cross_count+1} BHEJA!", flush=True)
+                        print(f"Bot2: [{cdcx_name}] ✅ SHORT ALERT #{cross_count + 1} BHEJA!", flush=True)
 
                 time.sleep(1)
 
@@ -444,14 +432,16 @@ def bot2_supertrend_short():
                 WATCHLIST.pop(symbol, None)
                 save_watchlist()
 
-            print(f"Bot2: ===== CYCLE COMPLETE — 120s wait =====\n", flush=True)
+            print(f"Bot2: ===== CYCLE COMPLETE — 30s wait =====\n", flush=True)
 
         except Exception as e:
             import traceback
             print(f"Bot2 Error: {e}", flush=True)
             print(traceback.format_exc(), flush=True)
 
-        time.sleep(120)
+        # FIX: 120s → 30s taaki cross miss na ho
+        time.sleep(30)
+
 
 # ─────────────────────────────────────────────────────────────
 # FLASK ROUTES
