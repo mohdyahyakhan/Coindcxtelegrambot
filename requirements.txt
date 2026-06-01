@@ -1,4 +1,4 @@
-Flask
-requests
-pandas
-numpy
+Flask==3.0.3
+requests==2.32.3
+pandas==2.2.2
+ta==0.11.0
