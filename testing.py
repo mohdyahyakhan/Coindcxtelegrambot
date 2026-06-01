@@ -135,7 +135,8 @@ def process_pump_alert(symbol, change_24h, price, source, alerted_symbols):
         return
     alerted_symbols.add(symbol)
     if symbol not in WATCHLIST:
-        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0}
+        # last_state add kiya taaki crossover track ho sake
+        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
     else:
         WATCHLIST[symbol]['time'] = time.time()
     save_watchlist()
@@ -351,11 +352,22 @@ def bot2_supertrend_short():
                 if any(math.isnan(v) for v in [st_line, ema_val, close_price]):
                     print(f"Bot2: [{cdcx_name}] SKIP — NaN", flush=True)
                     continue
+
+                # Current state nikal
                 price_below_st = close_price < st_line
                 st_below_ema = st_line < ema_val
-                short_condition = price_below_st and st_below_ema
-                print(f"Bot2: [{cdcx_name}] Price={close_price:.6f} | ST={st_line:.6f} | EMA{EMA_PERIOD}={ema_val:.6f} | SIGNAL={short_condition}", flush=True)
-                if short_condition:
+                current_short = price_below_st and st_below_ema
+
+                # Last state nikal - agar missing hai toh not_short maan le
+                last_state = info.get('last_state', 'not_short')
+
+                # Crossover detect: pehle not_short tha, ab short hua
+                new_cross = (last_state == 'not_short' and current_short == True)
+
+                print(f"Bot2: [{cdcx_name}] Price={close_price:.6f} | ST={st_line:.6f} | EMA{EMA_PERIOD}={ema_val:.6f} | SHORT={current_short} | NEW_CROSS={new_cross}", flush=True)
+
+                # Sirf naye cross pe alert
+                if new_cross:
                     cross_count = info.get('cross_count', 0)
                     if cross_count >= 3:
                         print(f"Bot2: [{cdcx_name}] Limit 3/3 reach — skip", flush=True)
@@ -375,8 +387,12 @@ def bot2_supertrend_short():
                         )
                         send_telegram(msg)
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
-                        save_watchlist()
                         print(f"Bot2: [{cdcx_name}] ✅ SHORT ALERT #{cross_count + 1}!", flush=True)
+
+                # Har cycle mein state update karo
+                WATCHLIST[symbol]['last_state'] = 'short' if current_short else 'not_short'
+                save_watchlist()
+
                 time.sleep(1)
             for symbol in to_remove:
                 WATCHLIST.pop(symbol, None)
