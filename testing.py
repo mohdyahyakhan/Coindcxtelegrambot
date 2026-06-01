@@ -299,19 +299,25 @@ def bot1_scan_bybit_futures():
                         cdcx_map[symbol] = t
                 pumped_cdcx = 0
                 for symbol in coindcx_only:
-                    if symbol not in cdcx_map:
-                        continue
-                    ticker = cdcx_map[symbol]
-                    try:
-                        change_24h = float(ticker.get('change_24_hour', ticker.get('change_24h', 0)))
-                        price = ticker.get('last_price', '0')
-                        print(f"DEBUG CoinDCX {symbol}: change={change_24h}% price={price}", flush=True)
-                        if change_24h >= PUMP_PERCENT_24H:
-                            process_pump_alert(symbol, change_24h, price, 'CoinDCX Futures', alerted_symbols)
-                            pumped_cdcx += 1
-                    except Exception as e:
-                        print(f"CoinDCX parse error {symbol}: {e}", flush=True)
-                        continue
+    if symbol not in cdcx_map:
+        continue
+    ticker = cdcx_map[symbol]
+    try:
+        change_raw = ticker.get('change_24_hour') or ticker.get('change_24h') or 0
+        change_24h = float(change_raw)
+        price = ticker.get('last_price', '0')
+
+        # VIC ke liye debug
+        if symbol == 'VICUSDT':
+            print(f"VIC DEBUG: change_raw={change_raw} float={change_24h} price={price}", flush=True)
+            print(f"VIC DEBUG: full ticker={ticker}", flush=True)
+
+        if change_24h >= PUMP_PERCENT_24H:
+            process_pump_alert(symbol, change_24h, price, 'CoinDCX Futures', alerted_symbols)
+            pumped_cdcx += 1
+    except Exception as e:
+        print(f"CoinDCX parse error {symbol}: {e} | data={ticker}", flush=True)
+        continue
                 print(f"Bot1 [CoinDCX]: Scan complete | Pumped: {pumped_cdcx}", flush=True)
             except Exception as e:
                 print(f"Bot1 CoinDCX Error: {e}", flush=True)
