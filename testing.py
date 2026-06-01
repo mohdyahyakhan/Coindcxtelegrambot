@@ -354,9 +354,7 @@ def bot2_supertrend_short():
                     print(f"Bot2: [{cdcx_name}] SKIP — data nahi mila", flush=True)
                     continue
 
-                # ── FIX: Sahi candle close check ──────────────────────
-                # Bybit mein timestamp = candle OPEN time (milliseconds)
-                # 5min candle close hogi jab current_time - open_time >= 290s
+                # ── Candle close check ────────────────────────────────
                 last_candle_open_ms = df['timestamp'].iloc[-1]
                 elapsed_ms = time.time() * 1000 - last_candle_open_ms
 
@@ -366,60 +364,66 @@ def bot2_supertrend_short():
                           f"({elapsed_ms/1000:.0f}s / 290s, {remaining:.0f}s baki)", flush=True)
                     continue
 
-                # ── Indicators ────────────────────────────────────────
+                # ── Indicators calculate karo ─────────────────────────
                 try:
                     df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
                 except Exception as e:
                     print(f"Bot2: [{cdcx_name}] Supertrend error: {e}", flush=True)
                     continue
 
-                st_line      = df['st_line'].iloc[-1]
-                st_line_prev = df['st_line'].iloc[-2]
-                ema_val      = df['ema_val'].iloc[-1]
-                ema_prev     = df['ema_val'].iloc[-2]
-                close_price  = df['close'].iloc[-1]
+                st_line     = df['st_line'].iloc[-1]
+                ema_val     = df['ema_val'].iloc[-1]
+                close_price = df['close'].iloc[-1]
 
                 # ── NaN check ─────────────────────────────────────────
                 import math
-                if any(math.isnan(v) for v in [st_line, st_line_prev, ema_val, ema_prev]):
+                if any(math.isnan(v) for v in [st_line, ema_val, close_price]):
                     print(f"Bot2: [{cdcx_name}] SKIP — NaN value", flush=True)
                     continue
 
-                # ── Crossunder Logic ──────────────────────────────────
-                # Previous candle: ST EMA ke UPAR tha
-                # Current candle : ST EMA ke NICHE aa gaya
-                st_crossed_below_ema = (st_line_prev > ema_prev) and (st_line < ema_val)
+                # ══════════════════════════════════════════════════════
+                # NEW SIGNAL CONDITION:
+                # Price < Supertrend < EMA 300
+                # Matlab:
+                #   → Price bearish zone mein hai (ST ke neeche)
+                #   → Supertrend bhi bearish hai (EMA ke neeche)
+                #   → Double confirmation = Strong SHORT signal!
+                # ══════════════════════════════════════════════════════
+                price_below_st  = close_price < st_line   # Price ST se neeche
+                st_below_ema    = st_line < ema_val        # ST EMA se neeche
+                short_condition = price_below_st and st_below_ema  # Dono sach ho
 
-                st_pos      = "UPAR" if st_line > ema_val else "NICHE"
-                prev_st_pos = "UPAR" if st_line_prev > ema_prev else "NICHE"
-
+                # ── Debug log ─────────────────────────────────────────
                 print(
                     f"Bot2: [{cdcx_name}] "
-                    f"Close={close_price:.6f} | "
-                    f"ST={st_line:.6f}({st_pos}) | "
-                    f"EMA={ema_val:.6f} | "
-                    f"PrevST={st_line_prev:.6f}({prev_st_pos}) | "
-                    f"CROSS={st_crossed_below_ema}",
+                    f"Price={close_price:.6f} | "
+                    f"ST={st_line:.6f} | "
+                    f"EMA{EMA_PERIOD}={ema_val:.6f} | "
+                    f"Price<ST={price_below_st} | "
+                    f"ST<EMA={st_below_ema} | "
+                    f"SIGNAL={short_condition}",
                     flush=True
                 )
 
-                if st_crossed_below_ema:
+                # ── Signal Action ─────────────────────────────────────
+                if short_condition:
                     cross_count = info.get('cross_count', 0)
 
                     if cross_count >= 3:
-                        print(f"Bot2: [{cdcx_name}] Cross detected but limit 3/3 reach — skip", flush=True)
+                        print(f"Bot2: [{cdcx_name}] Signal mila but limit 3/3 reach — skip", flush=True)
                     else:
                         msg = (
                             f"🔻 <b>BOT 2: SHORT SIGNAL #{cross_count + 1}</b> 🔻\n\n"
                             f"<b>Coin:</b> {cdcx_name}\n"
-                            f"<b>Setup:</b> ST(10,3) crossed BELOW EMA({EMA_PERIOD})\n"
-                            f"<b>Cross:</b> #{cross_count + 1}/3\n"
-                            f"<b>Timeframe:</b> 5min\n"
-                            f"<b>ST Value:</b> ${st_line:.6f}\n"
-                            f"<b>EMA{EMA_PERIOD}:</b> ${ema_val:.6f}\n"
-                            f"<b>Price:</b> ${close_price:.6f}\n\n"
-                            f"CoinDCX Futures pe SHORT entry zone.\n"
-                            f"SL: ${st_line:.6f} ke upar ya recent high"
+                            f"<b>Condition:</b> Price &lt; ST &lt; EMA{EMA_PERIOD}\n"
+                            f"<b>Signal:</b> #{cross_count + 1}/3\n"
+                            f"<b>Timeframe:</b> 5min\n\n"
+                            f"<b>Price:</b> ${close_price:.6f}\n"
+                            f"<b>ST(10,3):</b> ${st_line:.6f}\n"
+                            f"<b>EMA{EMA_PERIOD}:</b> ${ema_val:.6f}\n\n"
+                            f"📊 Price &lt; Supertrend &lt; EMA{EMA_PERIOD}\n"
+                            f"🎯 CoinDCX Futures pe SHORT entry zone.\n"
+                            f"🛑 SL: ST ke upar → ${st_line:.6f}"
                         )
                         send_telegram(msg)
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
@@ -439,7 +443,6 @@ def bot2_supertrend_short():
             print(f"Bot2 Error: {e}", flush=True)
             print(traceback.format_exc(), flush=True)
 
-        # FIX: 120s → 30s taaki cross miss na ho
         time.sleep(30)
 
 
