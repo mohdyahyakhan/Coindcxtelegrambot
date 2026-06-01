@@ -70,11 +70,14 @@ def get_coindcx_futures_tickers():
     url = "https://public.coindcx.com/exchange/trades/v1/derivatives/futures_data"
     try:
         r = requests.get(url, timeout=10)
-        return r.json()
+        data = r.json()
+        # CoinDCX kabhi dict deta hai kabhi list
+        if isinstance(data, dict):
+            return data.get('data', [])
+        return data if isinstance(data, list) else []
     except Exception as e:
         print(f"CoinDCX API error: {e}", flush=True)
         return []
-
 def bot1_scan_bybit_futures():
     while True:
         try:
