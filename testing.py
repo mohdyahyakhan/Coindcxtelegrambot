@@ -45,12 +45,11 @@ def get_coindcx_futures_tickers():
     url = "https://public.coindcx.com/exchange/trades/v1/derivatives/futures_data"
     try:
         r = requests.get(url, timeout=10)
+        print(f"CoinDCX Status: {r.status_code}", flush=True)
+        print(f"CoinDCX Raw Text: {r.text[:500]}", flush=True)  # First 500 chars
         data = r.json()
         if isinstance(data, dict):
             data = data.get('data', [])
-        print(f"CoinDCX Futures Raw Length: {len(data)}", flush=True)
-        if len(data) > 0:
-            print(f"CoinDCX Futures First 3: {[d.get('market') for d in data[:3]]}", flush=True)
         return data
     except Exception as e:
         print(f"CoinDCX API error: {e}", flush=True)
