@@ -17,6 +17,11 @@ ATR_MULTIPLIER   = 3
 EMA_PERIOD       = 300
 WATCHLIST_FILE   = "watchlist.json"
 
+# ─────────────────────────────────────────────────────────────
+# CoinDCX pe listed futures pairs
+# Bot1 pehle Bybit se scan karega
+# Jo Bybit pe nahi milega → CoinDCX se scan karega
+# ─────────────────────────────────────────────────────────────
 COINDX_FUTURES = {
     '0GUSDT', '00000MOGUSDT', '00BONKUSDT', '00CATUSDT', '00FLOKIUSDT',
     '00LUNCUSDT', '00PEUSDT', '00RATSUSDT', '00SATSUSDT', '00SHIBUSDT',
@@ -150,6 +155,40 @@ def send_telegram(msg):
 
 
 # ─────────────────────────────────────────────────────────────
+# ALERT HELPER — duplicate avoid + watchlist update
+# ─────────────────────────────────────────────────────────────
+
+def process_pump_alert(symbol, change_24h, price, source, alerted_symbols):
+    """
+    Common function — Bybit aur CoinDCX dono ke liye.
+    Duplicate alert avoid karta hai aur watchlist update karta hai.
+    """
+    if symbol in alerted_symbols:
+        return
+
+    alerted_symbols.add(symbol)
+
+    if symbol not in WATCHLIST:
+        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0}
+    else:
+        WATCHLIST[symbol]['time'] = time.time()
+    save_watchlist()
+
+    cdcx_name = symbol.replace('USDT', '-USDT')
+    msg = (
+        f"🚨 <b>BOT 1: 24H PUMP ALERT</b> 🚨\n\n"
+        f"<b>Coin:</b> {cdcx_name}\n"
+        f"<b>24h Change:</b> +{change_24h:.2f}%\n"
+        f"<b>Price:</b> ${price}\n"
+        f"<b>Source:</b> {source}\n\n"
+        f"👀 Bot2 watchlist mein add kiya.\n"
+        f"⏳ {WATCHLIST_DAYS} din tak monitor karega."
+    )
+    send_telegram(msg)
+    print(f"Bot1 Alert [{source}]: {cdcx_name} {change_24h:.2f}%", flush=True)
+
+
+# ─────────────────────────────────────────────────────────────
 # SUPERTREND CALCULATE
 # ─────────────────────────────────────────────────────────────
 
@@ -209,15 +248,10 @@ def calculate_supertrend(df, period=10, multiplier=3):
 
 
 # ─────────────────────────────────────────────────────────────
-# GET KLINES
-# ═══════════════════════════════════════════════════════════
-# MAIN FIX:
-# 1. limit=351 — taaki drop ke baad 350 candles bachein
-# 2. iloc[:-1] — current open candle drop karo
-# 3. Candle timing check BILKUL NAHI — zaroorat nahi!
-#    Closed candles hamesha ready hoti hain analysis ke liye
-# ═══════════════════════════════════════════════════════════
-def get_klines(symbol, interval='5', limit=351):
+# GET KLINES — Bybit (major coins ke liye)
+# ─────────────────────────────────────────────────────────────
+
+def get_klines_bybit(symbol, interval='5', limit=351):
     url    = "https://api.bybit.com/v5/market/kline"
     params = {
         'category': 'linear',
@@ -227,7 +261,7 @@ def get_klines(symbol, interval='5', limit=351):
     }
     try:
         res = requests.get(url, params=params, timeout=15).json()
-        if res['retCode'] == 0:
+        if res['retCode'] == 0 and res['result']['list']:
             data = res['result']['list']
             df = pd.DataFrame(data,
                 columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
@@ -238,76 +272,188 @@ def get_klines(symbol, interval='5', limit=351):
                 'low':   float,
                 'close': float
             })
-            # Bybit latest-first → reverse
             df = df.iloc[::-1].reset_index(drop=True)
-            # Current open candle drop karo
-            df = df.iloc[:-1].reset_index(drop=True)
-
+            df = df.iloc[:-1].reset_index(drop=True)  # open candle drop
             if len(df) < EMA_PERIOD + 50:
-                print(f"Warning: {symbol} sirf {len(df)} candles", flush=True)
                 return None
             return df
     except Exception as e:
-        print(f"Kline Error {symbol}: {e}", flush=True)
+        print(f"Bybit Kline Error {symbol}: {e}", flush=True)
     return None
 
 
 # ─────────────────────────────────────────────────────────────
-# BOT 1 — 24H Pump Scanner
+# GET KLINES — CoinDCX (VIC jaisi coins ke liye)
+# ─────────────────────────────────────────────────────────────
+
+def get_klines_coindcx(symbol, interval='5m', limit=351):
+    """
+    CoinDCX candle API.
+    symbol format: VICUSDT → pair = "F-VIC_USDT" (futures)
+    """
+    # VICUSDT → VIC aur USDT alag karo
+    base = symbol.replace('USDT', '')
+    pair = f"F-{base}_USDT"
+
+    url    = "https://api.coindcx.com/exchange/v1/candles"
+    params = {
+        'pair':     pair,
+        'interval': interval,
+        'limit':    limit
+    }
+    try:
+        res = requests.get(url, params=params, timeout=15)
+        data = res.json()
+
+        if not data or not isinstance(data, list):
+            return None
+
+        df = pd.DataFrame(data)
+
+        # CoinDCX candle format: {open, high, low, close, volume, time}
+        df = df.rename(columns={'time': 'timestamp'})
+        df = df[['timestamp', 'open', 'high', 'low', 'close', 'volume']]
+        df = df.astype({
+            'timestamp': 'int64',
+            'open':  float,
+            'high':  float,
+            'low':   float,
+            'close': float
+        })
+
+        # CoinDCX oldest-first deta hai → sort karo
+        df = df.sort_values('timestamp').reset_index(drop=True)
+        df = df.iloc[:-1].reset_index(drop=True)  # open candle drop
+
+        if len(df) < EMA_PERIOD + 50:
+            print(f"CoinDCX: {symbol} sirf {len(df)} candles", flush=True)
+            return None
+        return df
+
+    except Exception as e:
+        print(f"CoinDCX Kline Error {symbol}: {e}", flush=True)
+    return None
+
+
+# ─────────────────────────────────────────────────────────────
+# GET KLINES — Smart: Bybit try karo, nahi mila toh CoinDCX
+# ─────────────────────────────────────────────────────────────
+
+def get_klines(symbol, interval='5'):
+    # Pehle Bybit try karo
+    df = get_klines_bybit(symbol, interval=interval)
+    if df is not None:
+        return df
+
+    # Bybit pe nahi mila → CoinDCX try karo
+    print(f"Bot2: {symbol} Bybit pe nahi mila — CoinDCX try kar raha hoon...", flush=True)
+    df = get_klines_coindcx(symbol, interval=f"{interval}m")
+    if df is not None:
+        print(f"Bot2: {symbol} CoinDCX se data mila ✅", flush=True)
+    return df
+
+
+# ─────────────────────────────────────────────────────────────
+# BOT 1 — Dual Source Scanner: Bybit + CoinDCX
 # ─────────────────────────────────────────────────────────────
 
 def bot1_scan_bybit_futures():
-    print("Bot1 started", flush=True)
+    print("Bot1 started — Dual Source (Bybit + CoinDCX)", flush=True)
     alerted_symbols = set()
 
     while True:
         try:
-            url      = "https://api.bybit.com/v5/market/tickers"
-            params   = {'category': 'linear'}
-            headers  = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get(url, params=params, headers=headers, timeout=20)
-            data     = response.json()
+            bybit_symbols_found = set()
 
-            if data['retCode'] != 0:
-                print(f"Bot1 API Error: {data}", flush=True)
-                time.sleep(60)
-                continue
+            # ════════════════════════════════════════
+            # SOURCE 1: Bybit
+            # ════════════════════════════════════════
+            try:
+                url      = "https://api.bybit.com/v5/market/tickers"
+                params   = {'category': 'linear'}
+                headers  = {'User-Agent': 'Mozilla/5.0'}
+                response = requests.get(url, params=params, headers=headers, timeout=20)
+                data     = response.json()
 
-            tickers    = data['result']['list']
-            cdcx_count = 0
-            pumped     = 0
+                if data['retCode'] == 0:
+                    tickers    = data['result']['list']
+                    cdcx_count = 0
+                    pumped     = 0
 
-            for ticker in tickers:
-                symbol = ticker['symbol']
-                if symbol not in COINDX_FUTURES:
-                    continue
-                cdcx_count += 1
-                change_24h = float(ticker['price24hPcnt']) * 100
+                    for ticker in tickers:
+                        symbol = ticker['symbol']
+                        if symbol not in COINDX_FUTURES:
+                            continue
+                        cdcx_count += 1
+                        bybit_symbols_found.add(symbol)
+                        change_24h = float(ticker['price24hPcnt']) * 100
 
-                if change_24h >= PUMP_PERCENT_24H and symbol not in alerted_symbols:
-                    alerted_symbols.add(symbol)
-                    if symbol not in WATCHLIST:
-                        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0}
-                    else:
-                        WATCHLIST[symbol]['time'] = time.time()
-                    save_watchlist()
-                    pumped += 1
+                        if change_24h >= PUMP_PERCENT_24H:
+                            process_pump_alert(
+                                symbol, change_24h,
+                                ticker['lastPrice'],
+                                'Bybit Futures',
+                                alerted_symbols
+                            )
+                            pumped += 1
 
-                    cdcx_name = symbol.replace('USDT', '-USDT')
-                    price     = ticker['lastPrice']
-                    msg = (
-                        f"🚨 <b>BOT 1: 24H PUMP ALERT</b> 🚨\n\n"
-                        f"<b>Coin:</b> {cdcx_name}\n"
-                        f"<b>24h Change:</b> +{change_24h:.2f}%\n"
-                        f"<b>Price:</b> ${price}\n"
-                        f"<b>Exchange:</b> CoinDCX Listed\n\n"
-                        f"👀 Bot2 watchlist mein add kiya.\n"
-                        f"⏳ {WATCHLIST_DAYS} din tak monitor karega."
-                    )
-                    send_telegram(msg)
-                    print(f"Bot1 Alert: {cdcx_name} {change_24h:.2f}%", flush=True)
+                    print(f"Bot1 [Bybit]: {cdcx_count} pairs checked | Pumped: {pumped}", flush=True)
+                else:
+                    print(f"Bot1 Bybit API Error: {data['retMsg']}", flush=True)
 
-            print(f"Bot1: {cdcx_count} pairs checked | Pumped: {pumped} | Watchlist: {len(WATCHLIST)}", flush=True)
+            except Exception as e:
+                print(f"Bot1 Bybit Error: {e}", flush=True)
+
+            # ════════════════════════════════════════
+            # SOURCE 2: CoinDCX
+            # Jo coins Bybit pe nahi mile unhe scan karo
+            # Example: VICUSDT Bybit pe nahi hai
+            # ════════════════════════════════════════
+            try:
+                coindcx_only = COINDX_FUTURES - bybit_symbols_found
+                print(f"Bot1 [CoinDCX]: {len(coindcx_only)} coins scan kar raha hoon jo Bybit pe nahi hain...", flush=True)
+
+                url  = "https://api.coindcx.com/exchange/ticker"
+                res  = requests.get(url, timeout=20).json()
+
+                # CoinDCX ticker format: {"market": "F-VIC_USDT", "last_price": "0.065", ...}
+                # change_24_hour field hota hai
+                cdcx_map = {}
+                for t in res:
+                    market = t.get('market', '')
+                    # Futures pairs "F-" se start hote hain
+                    if market.startswith('F-') and market.endswith('_USDT'):
+                        # F-VIC_USDT → VICUSDT
+                        base   = market.replace('F-', '').replace('_USDT', '')
+                        symbol = f"{base}USDT"
+                        cdcx_map[symbol] = t
+
+                pumped_cdcx = 0
+                for symbol in coindcx_only:
+                    if symbol not in cdcx_map:
+                        continue
+                    ticker = cdcx_map[symbol]
+                    try:
+                        change_24h = float(ticker.get('change_24_hour', 0))
+                        price      = ticker.get('last_price', '0')
+
+                        if change_24h >= PUMP_PERCENT_24H:
+                            process_pump_alert(
+                                symbol, change_24h,
+                                price,
+                                'CoinDCX Futures',
+                                alerted_symbols
+                            )
+                            pumped_cdcx += 1
+                    except Exception:
+                        continue
+
+                print(f"Bot1 [CoinDCX]: Scan complete | Pumped: {pumped_cdcx}", flush=True)
+
+            except Exception as e:
+                print(f"Bot1 CoinDCX Error: {e}", flush=True)
+
+            print(f"Bot1: Total Watchlist: {len(WATCHLIST)} coins\n", flush=True)
 
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
@@ -318,7 +464,6 @@ def bot1_scan_bybit_futures():
 # ─────────────────────────────────────────────────────────────
 # BOT 2 — Supertrend SHORT Signal
 # Condition: Price < Supertrend < EMA 300
-# CANDLE TIMING CHECK HATAYA — get_klines already closed candles deta hai
 # ─────────────────────────────────────────────────────────────
 
 def bot2_supertrend_short():
@@ -343,10 +488,10 @@ def bot2_supertrend_short():
                     to_remove.append(symbol)
                     continue
 
-                # Data fetch
+                # Data fetch — Smart (Bybit → CoinDCX fallback)
                 df = get_klines(symbol)
                 if df is None or len(df) < EMA_PERIOD + 2:
-                    print(f"Bot2: [{cdcx_name}] SKIP — data nahi mila", flush=True)
+                    print(f"Bot2: [{cdcx_name}] SKIP — data nahi mila (Bybit + CoinDCX dono pe)", flush=True)
                     continue
 
                 # Indicators
@@ -365,9 +510,9 @@ def bot2_supertrend_short():
                     print(f"Bot2: [{cdcx_name}] SKIP — NaN", flush=True)
                     continue
 
-                # ════════════════════════════════════════════
+                # ════════════════════════════════════════
                 # SIGNAL: Price < Supertrend < EMA300
-                # ════════════════════════════════════════════
+                # ════════════════════════════════════════
                 price_below_st  = close_price < st_line
                 st_below_ema    = st_line < ema_val
                 short_condition = price_below_st and st_below_ema
@@ -428,7 +573,7 @@ def bot2_supertrend_short():
 
 @app.route('/')
 def home():
-    return f"Bot running. Watchlist: {len(WATCHLIST)} coins."
+    return f"Bot running. Watchlist: {len(WATCHLIST)} coins. Dual Source: Bybit + CoinDCX"
 
 @app.route('/watchlist')
 def show_watchlist():
