@@ -102,6 +102,12 @@ def load_watchlist():
                     save_watchlist()
                 else:
                     WATCHLIST = data.get('coins', {})
+
+                    # Auto migration: purane coins mein last_state add karo
+                    for symbol in WATCHLIST:
+                        if 'last_state' not in WATCHLIST[symbol]:
+                            WATCHLIST[symbol]['last_state'] = 'not_short'
+
                     print(f"Loaded {len(WATCHLIST)} coins from watchlist.json", flush=True)
         else:
             WATCHLIST = {}
