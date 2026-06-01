@@ -71,8 +71,17 @@ def get_coindcx_futures_tickers():
     try:
         r = requests.get(url, timeout=10)
         data = r.json()
-        # Sirf futures wale filter kar - F- se start hote hain
-        futures_data = [item for item in data if item.get('market', '').startswith('F-')]
+        
+        # CoinDCX kabhi list deta hai kabhi dict
+        if isinstance(data, dict):
+            data = data.get('data', [])
+        
+        print(f"CoinDCX Raw Data Length: {len(data)}", flush=True)
+        if len(data) > 0:
+            print(f"CoinDCX First 3 Markets: {[d.get('market') for d in data[:3]]}", flush=True)
+
+        # Sirf F- wale futures
+        futures_data = [item for item in data if str(item.get('market', '')).startswith('F-')]
         return futures_data
     except Exception as e:
         print(f"CoinDCX API error: {e}", flush=True)
