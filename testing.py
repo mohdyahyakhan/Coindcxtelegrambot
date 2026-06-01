@@ -1,62 +1,37 @@
 import os
 import time
 import requests
+import pandas as pd
 import threading
-from collections import defaultdict
 from datetime import datetime
 from flask import Flask
+import ta
 
 app = Flask(__name__)
 
-@app.route("/")
-def home():
-    return "Bot is running", 200
+# ========== CONFIG ==========
+BOT_TOKEN = os.getenv("BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+CHAT_ID = os.getenv("CHAT_ID", "YOUR_CHAT_ID_HERE")
 
-def run_flask():
-    app.run(host="0.0.0.0", port=10000)
+PUMP_PERCENT_24H = 10
+BYBIT_CYCLE_SEC = 60
+EMA_PERIOD = 300
 
-threading.Thread(target=run_flask, daemon=True).start()
+# CoinDCX Futures watchlist
+COINDX_FUTURES = {'VICUSDT', 'STGUSDT', 'WLDUSDT'}
 
-# ====== CONFIG ======
-TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
-PUMP_PERCENT_24H = 10 # Testing ke liye 10%. Baad mein 40 kar dena
-MAX_ALERTS_PER_COIN = 3
-BYBIT_CYCLE_SEC = 300
-CDCX_CYCLE_SEC = 300
-BOT2_CYCLE_SEC = 30
+alerted_symbols = set()
+bot2_active_symbols = set()
 
-alerted_symbols = defaultdict(int)
-
-COINDX_FUTURES = {
-    'STGUSDT', 'WLDUSDT', 'ACUUSDT', 'AIGENSYNUSDT', 'BANUSDT', 'BILLUSDT',
-    'EPICUSDT', 'FFUSDT', 'FHEUSDT', 'HOMEUSDT', 'HUSDT', 'ICNTUSDT',
-    'INITUSDT', 'MBOXUSDT', 'MERLUSDT', 'NOMUSDT', 'PORTALUSDT', 'RONINUSDT',
-    'VICUSDT'
-}
-
-def send_telegram_alert(text):
-    url = f'https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage'
+# ========== TELEGRAM ==========
+def send_telegram(text):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     try:
-        requests.post(url, data={'chat_id': TELEGRAM_CHAT_ID, 'text': text}, timeout=10)
+        requests.post(url, json={"chat_id": CHAT_ID, "text": text}, timeout=10)
     except Exception as e:
         print(f"Telegram error: {e}", flush=True)
 
-def process_pump_alert(symbol, change_24h, price, source, alerted_dict):
-    if alerted_dict[symbol] >= MAX_ALERTS_PER_COIN:
-        print(f"{symbol} Limit {MAX_ALERTS_PER_COIN}/{MAX_ALERTS_PER_COIN} reach — skip", flush=True)
-        return False
-
-    alerted_dict[symbol] += 1
-    msg = f"🔥 BOT1: {symbol} PUMP ALERT #{alerted_dict[symbol]}/{MAX_ALERTS_PER_COIN}\n"
-    msg += f"Exchange: {source}\n"
-    msg += f"24h Change: {change_24h:.2f}%\n"
-    msg += f"Price: ${price}\n"
-    msg += f"Time: {datetime.now().strftime('%H:%M:%S')}"
-    send_telegram_alert(msg)
-    print(f"Bot1 Alert [{source}]: {symbol} {change_24h:.2f}%", flush=True)
-    return True
-
+# ========== API HELPERS ==========
 def get_bybit_futures_tickers():
     url = "https://api.bybit.com/v5/market/tickers?category=linear"
     try:
@@ -71,19 +46,58 @@ def get_coindcx_futures_tickers():
     try:
         r = requests.get(url, timeout=10)
         data = r.json()
-
         if isinstance(data, dict):
             data = data.get('data', [])
-
         print(f"CoinDCX Futures Raw Length: {len(data)}", flush=True)
         if len(data) > 0:
             print(f"CoinDCX Futures First 3: {[d.get('market') for d in data[:3]]}", flush=True)
-
         return data
     except Exception as e:
         print(f"CoinDCX API error: {e}", flush=True)
         return []
-        
+
+def get_bybit_klines(symbol, interval="1", limit=300):
+    url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={symbol}&interval={interval}&limit={limit}"
+    try:
+        r = requests.get(url, timeout=10)
+        return r.json().get('result', {}).get('list', [])
+    except Exception as e:
+        print(f"Kline error {symbol}: {e}", flush=True)
+        return []
+
+# ========== INDICATORS ==========
+def supertrend(df, period=10, multiplier=3):
+    hl2 = (df['high'] + df['low']) / 2
+    atr = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close'], window=period).average_true_range()
+    upperband = hl2 + (multiplier * atr)
+    lowerband = hl2 - (multiplier * atr)
+    st = [True] * len(df)
+    for i in range(1, len(df)):
+        if df['close'].iloc[i] > upperband.iloc[i-1]:
+            st[i] = True
+        elif df['close'].iloc[i] < lowerband.iloc[i-1]:
+            st[i] = False
+        else:
+            st[i] = st[i-1]
+            if st[i] and lowerband.iloc[i] < lowerband.iloc[i-1]:
+                lowerband.iloc[i] = lowerband.iloc[i-1]
+            if not st[i] and upperband.iloc[i] > upperband.iloc[i-1]:
+                upperband.iloc[i] = upperband.iloc[i-1]
+    return pd.Series([lowerband.iloc[i] if st[i] else upperband.iloc[i] for i in range(len(df))], index=df.index)
+
+def calculate_ema(df, period=EMA_PERIOD):
+    return ta.trend.EMAIndicator(df['close'], window=period).ema_indicator()
+
+# ========== BOT1: PUMP SCANNER ==========
+def process_pump_alert(symbol, change_24h, price, source, alerted_set):
+    if symbol not in alerted_set:
+        alerted_set.add(symbol)
+        msg = f"Bot1 Alert [{source}]: {symbol} {change_24h:.2f}%"
+        print(msg, flush=True)
+        send_telegram(msg)
+        return True
+    return False
+
 def bot1_scan_bybit_futures():
     while True:
         try:
@@ -107,13 +121,13 @@ def bot1_scan_bybit_futures():
 
             cdcx_data = get_coindcx_futures_tickers()
             cdcx_map = {}
-for item in cdcx_data:
-    market = item.get('market', '')
-    if not market.startswith('F-'):
-        continue
-    symbol = market.replace('F-', '')
-    cdcx_map[symbol] = item
-    
+            for item in cdcx_data:
+                market = item.get('market', '')
+                if not market.startswith('F-'):
+                    continue
+                symbol = market.replace('F-', '')
+                cdcx_map[symbol] = item
+
             print(f"CoinDCX Map has VICUSDT: {'VICUSDT' in cdcx_map}", flush=True)
             print(f"CoinDCX Map Keys Sample: {list(cdcx_map.keys())[:30]}", flush=True)
 
@@ -149,83 +163,61 @@ for item in cdcx_data:
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
         time.sleep(BYBIT_CYCLE_SEC)
-        
-def calculate_st_ema(prices, st_len=10, st_mult=3, ema_len=300):
-    if len(prices) < ema_len:
-        return None, None
 
-    # Simple ST calculation
-    atr = sum(abs(prices[i] - prices[i-1]) for i in range(1, min(st_len+1, len(prices)))) / st_len
-    st = prices[-1] - st_mult * atr
-
-    # Simple EMA calculation
-    k = 2 / (ema_len + 1)
-    ema = prices[0]
-    for p in prices[1:]:
-        ema = p * k + ema * (1 - k)
-
-    return st, ema
-
-def bot2_check_signals():
+# ========== BOT2: ST + EMA SIGNAL ==========
+def bot2_signal_checker():
     while True:
         try:
-            watchlist = list(alerted_symbols.keys())
-            if not watchlist:
-                time.sleep(BOT2_CYCLE_SEC)
+            if not alerted_symbols:
+                time.sleep(30)
                 continue
 
-            print(f"Bot2: ===== NEW CYCLE - {len(watchlist)} coins =====", flush=True)
+            current_symbols = list(alerted_symbols)
+            print(f"Bot2: ===== NEW CYCLE - {len(current_symbols)} coins =====", flush=True)
 
-            for symbol in watchlist:
-                if alerted_symbols[symbol] >= MAX_ALERTS_PER_COIN:
-                    continue
-
-                # Get 5min candles from Bybit
-                url = f"https://api.bybit.com/v5/market/kline?category=linear&symbol={symbol}&interval=5&limit=300"
+            for symbol in current_symbols:
                 try:
-                    r = requests.get(url, timeout=10)
-                    candles = r.json().get('result', {}).get('list', [])
-                    if len(candles) < 300:
+                    klines = get_bybit_klines(symbol, limit=EMA_PERIOD)
+                    if len(klines) < EMA_PERIOD:
                         continue
 
-                    closes = [float(c[4]) for c in candles[::-1]]
-                    price = closes[-1]
-                    st, ema300 = calculate_st_ema(closes)
+                    df = pd.DataFrame(klines, columns=['time','open','high','low','close','volume','turnover'])
+                    df = df.astype(float)
 
-                    if st is None:
-                        continue
+                    st = supertrend(df)
+                    ema = calculate_ema(df)
 
-                    signal = price < st < ema300
-                    print(f"Bot2: [{symbol}] Price={price:.6f} | ST={st:.6f} | EMA300={ema300:.6f} | SIGNAL={signal}", flush=True)
+                    price = df['close'].iloc[-1]
+                    st_val = st.iloc[-1]
+                    ema_val = ema.iloc[-1]
 
-                    if signal:
-                        alerted_symbols[symbol] += 1
-                        msg = f"🔻 BOT 2: SHORT SIGNAL #{alerted_symbols[symbol]}/3 🔻\n\n"
-                        msg += f"Coin: {symbol}\n"
-                        msg += f"Condition: Price < ST < EMA300\n"
-                        msg += f"Signal: #{alerted_symbols[symbol]}/3\n"
-                        msg += f"Timeframe: 5min\n"
-                        msg += f"Price: ${price:.6f}\n"
-                        msg += f"ST(10,3): ${st:.6f}\n"
-                        msg += f"EMA300: ${ema300:.6f}\n\n"
-                        msg += f"📊 Price < Supertrend < EMA300\n"
-                        msg += f"🎯 CoinDCX Futures pe SHORT entry zone.\n"
-                        msg += f"🛑 SL: ST ke upar → ${st:.6f}"
-                        send_telegram_alert(msg)
-                        print(f"Bot2: [{symbol}] ✅ SHORT ALERT #{alerted_symbols[symbol]}!", flush=True)
+                    signal = price > st_val and price > ema_val
+
+                    print(f"Bot2: [{symbol}] Price={price:.6f} | ST={st_val:.6f} | EMA{EMA_PERIOD}={ema_val:.6f} | SIGNAL={signal}", flush=True)
+
+                    if signal and symbol not in bot2_active_symbols:
+                        bot2_active_symbols.add(symbol)
+                        msg = f"Bot2 SIGNAL: {symbol} | Price: {price:.6f} > ST & EMA{EMA_PERIOD}"
+                        send_telegram(msg)
 
                 except Exception as e:
-                    print(f"Bot2 Error {symbol}: {e}", flush=True)
+                    print(f"Bot2 error {symbol}: {e}", flush=True)
+                    continue
 
-            print(f"Bot2: ===== CYCLE COMPLETE - {BOT2_CYCLE_SEC}s wait =====", flush=True)
+            print(f"Bot2: ===== CYCLE COMPLETE - 30s wait =====", flush=True)
+            time.sleep(30)
 
         except Exception as e:
-            print(f"Bot2 Main Error: {e}", flush=True)
-        time.sleep(BOT2_CYCLE_SEC)
+            print(f"Bot2 Error: {e}", flush=True)
+            time.sleep(30)
 
-if __name__ == "__main__":
+# ========== FLASK ==========
+@app.route('/')
+def home():
+    return "Bot Running", 200
+
+# ========== START ==========
+if __name__ == '__main__':
     threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
-    threading.Thread(target=bot2_check_signals, daemon=True).start()
-
-    while True:
-        time.sleep(60)
+    threading.Thread(target=bot2_signal_checker, daemon=True).start()
+    app.run(host='0.0.0.0', port=int(os.getenv('PORT', 10000)))
