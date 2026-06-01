@@ -100,23 +100,17 @@ def bot1_scan_bybit_futures():
                     continue
 
             cdcx_data = get_coindcx_futures_tickers()
-            cdcx_map = {}
-            for item in cdcx_data:
-                market = item.get('market', '')
-                if not market.startswith('F-'):
-                    continue
-                # Fix: handle both F-VICUSDT and F-VIC_USDT
-                base = market.replace('F-', '').replace('_USDT', '').replace('USDT', '')
-                symbol = f"{base}USDT"
-                cdcx_map[symbol] = item
+           cdcx_map = {}
+for item in cdcx_data:
+    market = item.get('market', '')
+    if not market.startswith('F-'):
+        continue
+    base = market.replace('F-', '').replace('_USDT', '').replace('USDT', '')
+    symbol = f"{base}USDT"
+    cdcx_map[symbol] = item
 
-            print(f"CoinDCX Map has VICUSDT: {'VICUSDT' in cdcx_map}", flush=True)
-
-            coindcx_only = COINDX_FUTURES - bybit_symbols_found
-            pumped_cdcx = 0
-
-            print(f"Bot1 [CoinDCX]: {len(coindcx_only)} coins scan kar raha hoon...", flush=True)
-
+print(f"CoinDCX Map has VICUSDT: {'VICUSDT' in cdcx_map}", flush=True)
+print(f"CoinDCX Map Keys Sample: {list(cdcx_map.keys())[:30]}", flush=True)
             for symbol in coindcx_only:
                 if symbol not in cdcx_map:
                     continue
