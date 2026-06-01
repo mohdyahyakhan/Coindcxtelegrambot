@@ -67,14 +67,13 @@ def get_bybit_futures_tickers():
         return []
 
 def get_coindcx_futures_tickers():
-    url = "https://public.coindcx.com/exchange/trades/v1/derivatives/futures_data"
+    url = "https://api.coindcx.com/exchange/ticker"
     try:
         r = requests.get(url, timeout=10)
         data = r.json()
-        # CoinDCX kabhi dict deta hai kabhi list
-        if isinstance(data, dict):
-            return data.get('data', [])
-        return data if isinstance(data, list) else []
+        # Sirf futures wale filter kar - F- se start hote hain
+        futures_data = [item for item in data if item.get('market', '').startswith('F-')]
+        return futures_data
     except Exception as e:
         print(f"CoinDCX API error: {e}", flush=True)
         return []
