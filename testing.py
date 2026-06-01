@@ -294,7 +294,7 @@ def bot1_scan_bybit_futures():
                 for t in res:
                     market = t.get('market', '')
                     if market.startswith('F-') and market.endswith('_USDT'):
-                        base = market.replace('F-', '').replace('_USDT', '')
+                        base = market.replace('F-', '').replace('_USDT', '').replace('USDT', '')
                         symbol = f"{base}USDT"
                         cdcx_map[symbol] = t
                 pumped_cdcx = 0
