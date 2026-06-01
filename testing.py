@@ -67,7 +67,6 @@ def get_bybit_futures_tickers():
         return []
 
 def get_coindcx_futures_tickers():
-    # CoinDCX Futures ka sahi endpoint
     url = "https://public.coindcx.com/exchange/trades/v1/derivatives/futures_data"
     try:
         r = requests.get(url, timeout=10)
@@ -112,7 +111,6 @@ for item in cdcx_data:
     market = item.get('market', '')
     if not market.startswith('F-'):
         continue
-    # F-VICUSDT -> VICUSDT
     symbol = market.replace('F-', '')
     cdcx_map[symbol] = item
     
