@@ -10,8 +10,8 @@ import math
 
 app = Flask(__name__)
 
-PUMP_PERCENT_24H = 40       # Bot1 trigger - 24H Change
-WATCHLIST_DAYS   = 2        # 2 din tak monitor
+PUMP_PERCENT_24H = 40
+WATCHLIST_DAYS   = 2
 ATR_PERIOD       = 10
 ATR_MULTIPLIER   = 3
 EMA_PERIOD       = 300
@@ -105,7 +105,7 @@ def load_watchlist():
                 data = json.load(f)
                 saved_config = data.get('_config', {})
                 if saved_config != current_config:
-                    print(f"Config changed. Old: {saved_config} New: {current_config}. Clearing watchlist.", flush=True)
+                    print(f"Config changed. Clearing watchlist.", flush=True)
                     WATCHLIST = {}
                     save_watchlist()
                 else:
@@ -155,14 +155,11 @@ def send_telegram(msg):
 
 def calculate_supertrend(df, period=10, multiplier=3):
     df = df.copy()
-
     df['h-l']  = df['high'] - df['low']
     df['h-pc'] = abs(df['high'] - df['close'].shift(1))
     df['l-pc'] = abs(df['low']  - df['close'].shift(1))
     df['tr']   = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
-
-    # Wilder's RMA — TradingView se match karta hai
-    df['atr'] = df['tr'].ewm(alpha=1 / period, adjust=False).mean()
+    df['atr']  = df['tr'].ewm(alpha=1 / period, adjust=False).mean()
 
     hl2 = (df['high'] + df['low']) / 2
     df['upperband'] = hl2 + (multiplier * df['atr'])
@@ -213,12 +210,14 @@ def calculate_supertrend(df, period=10, multiplier=3):
 
 # ─────────────────────────────────────────────────────────────
 # GET KLINES
-# FIX: Current open candle drop karo → iloc[:-1]
-# Warna candle hamesha "close nahi hui" dikhegi
-# ─────────────────────────────────────────────────────────────
-
+# ═══════════════════════════════════════════════════════════
+# MAIN FIX:
+# 1. limit=351 — taaki drop ke baad 350 candles bachein
+# 2. iloc[:-1] — current open candle drop karo
+# 3. Candle timing check BILKUL NAHI — zaroorat nahi!
+#    Closed candles hamesha ready hoti hain analysis ke liye
+# ═══════════════════════════════════════════════════════════
 def get_klines(symbol, interval='5', limit=351):
-    # limit=351 isliye taaki drop karne ke baad 350 closed candles bachein
     url    = "https://api.bybit.com/v5/market/kline"
     params = {
         'category': 'linear',
@@ -239,22 +238,14 @@ def get_klines(symbol, interval='5', limit=351):
                 'low':   float,
                 'close': float
             })
-
-            # Bybit latest-first data deta hai → reverse karo
+            # Bybit latest-first → reverse
             df = df.iloc[::-1].reset_index(drop=True)
-
-            # ═══════════════════════════════════════════════════
-            # MAIN FIX: Last row = current OPEN candle — drop karo!
-            # Yahi wajah thi ki bot hamesha SKIP karta tha.
-            # Close candle ka timestamp hamesha current time se
-            # 290s se zyada pehle hoga → condition pass ho jayegi
-            # ═══════════════════════════════════════════════════
+            # Current open candle drop karo
             df = df.iloc[:-1].reset_index(drop=True)
 
             if len(df) < EMA_PERIOD + 50:
-                print(f"Warning: {symbol} ke liye sirf {len(df)} candles, EMA{EMA_PERIOD} ke liye kam hain", flush=True)
+                print(f"Warning: {symbol} sirf {len(df)} candles", flush=True)
                 return None
-
             return df
     except Exception as e:
         print(f"Kline Error {symbol}: {e}", flush=True)
@@ -263,24 +254,17 @@ def get_klines(symbol, interval='5', limit=351):
 
 # ─────────────────────────────────────────────────────────────
 # BOT 1 — 24H Pump Scanner
-# FIX: Re-alert logic — agar coin watchlist mein hai aur
-#      cross_count 0 hai (expire hua) toh dobara add hoga
-#      Naya din → naya pump → naya alert milna chahiye
 # ─────────────────────────────────────────────────────────────
 
 def bot1_scan_bybit_futures():
-    print("Bot1 Bybit Futures thread started", flush=True)
-
-    # ── FIX: Track karo kaun se symbols aaj already alert ho chuke ──
-    # Yeh set sirf current bot session mein rahega
-    # Bot restart hone pe reset ho jayega — intentional
+    print("Bot1 started", flush=True)
     alerted_symbols = set()
 
     while True:
         try:
-            url     = "https://api.bybit.com/v5/market/tickers"
-            params  = {'category': 'linear'}
-            headers = {'User-Agent': 'Mozilla/5.0'}
+            url      = "https://api.bybit.com/v5/market/tickers"
+            params   = {'category': 'linear'}
+            headers  = {'User-Agent': 'Mozilla/5.0'}
             response = requests.get(url, params=params, headers=headers, timeout=20)
             data     = response.json()
 
@@ -297,29 +281,15 @@ def bot1_scan_bybit_futures():
                 symbol = ticker['symbol']
                 if symbol not in COINDX_FUTURES:
                     continue
-
                 cdcx_count += 1
                 change_24h = float(ticker['price24hPcnt']) * 100
 
-                # ── FIX: alerted_symbols check karo ──────────────────
-                # Pehle: "symbol not in WATCHLIST" → agar watchlist mein
-                #        tha toh alert nahi aata tha (VIC wali problem!)
-                # Ab: alerted_symbols se track karo — har session mein
-                #     ek baar alert aayega chahe watchlist mein ho ya na ho
                 if change_24h >= PUMP_PERCENT_24H and symbol not in alerted_symbols:
                     alerted_symbols.add(symbol)
-
-                    # Watchlist mein add/update karo
                     if symbol not in WATCHLIST:
-                        WATCHLIST[symbol] = {
-                            'time':        time.time(),
-                            'cross_count': 0
-                        }
-                    # Agar already tha toh cross_count reset mat karo
-                    # Sirf time update karo taaki expire na ho
+                        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0}
                     else:
                         WATCHLIST[symbol]['time'] = time.time()
-
                     save_watchlist()
                     pumped += 1
 
@@ -330,17 +300,14 @@ def bot1_scan_bybit_futures():
                         f"<b>Coin:</b> {cdcx_name}\n"
                         f"<b>24h Change:</b> +{change_24h:.2f}%\n"
                         f"<b>Price:</b> ${price}\n"
-                        f"<b>Exchange:</b> CoinDCX Listed\n"
-                        f"<b>Source:</b> Bybit Futures\n\n"
+                        f"<b>Exchange:</b> CoinDCX Listed\n\n"
                         f"👀 Bot2 watchlist mein add kiya.\n"
                         f"⏳ {WATCHLIST_DAYS} din tak monitor karega."
                     )
                     send_telegram(msg)
                     print(f"Bot1 Alert: {cdcx_name} {change_24h:.2f}%", flush=True)
 
-            print(f"Bot1: Checked {cdcx_count} CoinDCX pairs | "
-                  f"Pumped (40%+): {pumped} | "
-                  f"Watchlist: {len(WATCHLIST)} coins", flush=True)
+            print(f"Bot1: {cdcx_count} pairs checked | Pumped: {pumped} | Watchlist: {len(WATCHLIST)}", flush=True)
 
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
@@ -351,10 +318,11 @@ def bot1_scan_bybit_futures():
 # ─────────────────────────────────────────────────────────────
 # BOT 2 — Supertrend SHORT Signal
 # Condition: Price < Supertrend < EMA 300
+# CANDLE TIMING CHECK HATAYA — get_klines already closed candles deta hai
 # ─────────────────────────────────────────────────────────────
 
 def bot2_supertrend_short():
-    print("Bot2 Supertrend SHORT thread started", flush=True)
+    print("Bot2 started", flush=True)
 
     while True:
         try:
@@ -369,36 +337,37 @@ def bot2_supertrend_short():
             for symbol, info in list(WATCHLIST.items()):
                 cdcx_name = symbol.replace('USDT', '-USDT')
 
-                # ── Watchlist expiry check ────────────────────────────
+                # Watchlist expiry
                 if time.time() - info['time'] > WATCHLIST_DAYS * 86400:
-                    print(f"Bot2: [{cdcx_name}] Watchlist expire — remove", flush=True)
+                    print(f"Bot2: [{cdcx_name}] Expire — remove", flush=True)
                     to_remove.append(symbol)
                     continue
 
-                # ── Data fetch (already fixed in get_klines) ─────────
+                # Data fetch
                 df = get_klines(symbol)
                 if df is None or len(df) < EMA_PERIOD + 2:
                     print(f"Bot2: [{cdcx_name}] SKIP — data nahi mila", flush=True)
                     continue
 
-                # ── Indicators calculate karo ─────────────────────────
+                # Indicators
                 try:
                     df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
                 except Exception as e:
-                    print(f"Bot2: [{cdcx_name}] Supertrend error: {e}", flush=True)
+                    print(f"Bot2: [{cdcx_name}] ST error: {e}", flush=True)
                     continue
 
                 st_line     = df['st_line'].iloc[-1]
                 ema_val     = df['ema_val'].iloc[-1]
                 close_price = df['close'].iloc[-1]
-                last_ts     = df['timestamp'].iloc[-1]
 
-                # ── NaN check ─────────────────────────────────────────
+                # NaN check
                 if any(math.isnan(v) for v in [st_line, ema_val, close_price]):
-                    print(f"Bot2: [{cdcx_name}] SKIP — NaN value", flush=True)
+                    print(f"Bot2: [{cdcx_name}] SKIP — NaN", flush=True)
                     continue
 
-                # ── Signal Condition: Price < ST < EMA ────────────────
+                # ════════════════════════════════════════════
+                # SIGNAL: Price < Supertrend < EMA300
+                # ════════════════════════════════════════════
                 price_below_st  = close_price < st_line
                 st_below_ema    = st_line < ema_val
                 short_condition = price_below_st and st_below_ema
@@ -408,7 +377,7 @@ def bot2_supertrend_short():
                     f"Price={close_price:.6f} | "
                     f"ST={st_line:.6f} | "
                     f"EMA{EMA_PERIOD}={ema_val:.6f} | "
-                    f"Price<ST={price_below_st} | "
+                    f"P<ST={price_below_st} | "
                     f"ST<EMA={st_below_ema} | "
                     f"SIGNAL={short_condition}",
                     flush=True
@@ -416,9 +385,8 @@ def bot2_supertrend_short():
 
                 if short_condition:
                     cross_count = info.get('cross_count', 0)
-
                     if cross_count >= 3:
-                        print(f"Bot2: [{cdcx_name}] Signal mila but limit 3/3 reach — skip", flush=True)
+                        print(f"Bot2: [{cdcx_name}] Limit 3/3 reach — skip", flush=True)
                     else:
                         msg = (
                             f"🔻 <b>BOT 2: SHORT SIGNAL #{cross_count + 1}</b> 🔻\n\n"
@@ -436,7 +404,7 @@ def bot2_supertrend_short():
                         send_telegram(msg)
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
                         save_watchlist()
-                        print(f"Bot2: [{cdcx_name}] ✅ SHORT ALERT #{cross_count + 1} BHEJA!", flush=True)
+                        print(f"Bot2: [{cdcx_name}] ✅ SHORT ALERT #{cross_count + 1}!", flush=True)
 
                 time.sleep(1)
 
@@ -455,12 +423,12 @@ def bot2_supertrend_short():
 
 
 # ─────────────────────────────────────────────────────────────
-# FLASK ROUTES
+# FLASK
 # ─────────────────────────────────────────────────────────────
 
 @app.route('/')
 def home():
-    return f"Bot running. Watchlist: {len(WATCHLIST)} coins. CoinDCX Filter: ON"
+    return f"Bot running. Watchlist: {len(WATCHLIST)} coins."
 
 @app.route('/watchlist')
 def show_watchlist():
@@ -472,9 +440,9 @@ def show_watchlist():
 # ─────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
-    print(f"BOT_TOKEN exists: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
-    print(f"CHAT_ID exists: {bool(TELEGRAM_CHAT_ID)}", flush=True)
-    print(f"CoinDCX Futures loaded: {len(COINDX_FUTURES)} pairs", flush=True)
+    print(f"BOT_TOKEN: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
+    print(f"CHAT_ID: {bool(TELEGRAM_CHAT_ID)}", flush=True)
+    print(f"CoinDCX pairs: {len(COINDX_FUTURES)}", flush=True)
 
     load_watchlist()
 
