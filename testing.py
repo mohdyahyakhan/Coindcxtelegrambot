@@ -364,13 +364,15 @@ def bot2_supertrend_short():
                 st_below_ema = st_line < ema_val
                 current_short = price_below_st and st_below_ema
 
-                # Last state nikal - agar missing hai toh not_short maan le
-                last_state = info.get('last_state', 'not_short')
+                # Reset state: price wapas dono ke upar gaya
+                reset_state = (close_price > st_line) and (st_line > ema_val)
 
-                # Crossover detect: pehle not_short tha, ab short hua
-                new_cross = (last_state == 'not_short' and current_short == True)
+                last_state = info.get('last_state', 'reset')
 
-                print(f"Bot2: [{cdcx_name}] Price={close_price:.6f} | ST={st_line:.6f} | EMA{EMA_PERIOD}={ema_val:.6f} | SHORT={current_short} | NEW_CROSS={new_cross}", flush=True)
+                # Naya cross tabhi bane jab pehle reset tha aur ab short hua
+                new_cross = (last_state == 'reset' and current_short == True)
+
+                print(f"Bot2: [{cdcx_name}] Price={close_price:.6f} | ST={st_line:.6f} | EMA{EMA_PERIOD}={ema_val:.6f} | SHORT={current_short} | RESET={reset_state} | NEW_CROSS={new_cross}", flush=True)
 
                 # Sirf naye cross pe alert
                 if new_cross:
@@ -395,8 +397,13 @@ def bot2_supertrend_short():
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
                         print(f"Bot2: [{cdcx_name}] ✅ SHORT ALERT #{cross_count + 1}!", flush=True)
 
-                # Har cycle mein state update karo
-                WATCHLIST[symbol]['last_state'] = 'short' if current_short else 'not_short'
+                # State update
+                if current_short:
+                    WATCHLIST[symbol]['last_state'] = 'short'
+                elif reset_state:
+                    WATCHLIST[symbol]['last_state'] = 'reset'
+                # beech ka zone hai toh state same rahegi
+
                 save_watchlist()
 
                 time.sleep(1)
