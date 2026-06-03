@@ -201,9 +201,13 @@ def calculate_supertrend(df, period=10, multiplier=3):
             df.loc[df.index[i], 'st_line'] = df['final_lowerband'].iloc[i]
         else:
             df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
-    df['ema_val'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
+    
+    # CoinDCX jaisa EMA 300 + 9 SMA smoothing
+    ema_raw = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
+    df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
+    
     return df
-
+    
 def get_klines_bybit(symbol, interval='5', limit=351):
     url = "https://api.bybit.com/v5/market/kline"
     params = {'category': 'linear', 'symbol': symbol, 'interval': interval, 'limit': limit}
