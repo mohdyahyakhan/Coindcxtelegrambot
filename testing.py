@@ -95,26 +95,20 @@ def load_watchlist():
         if os.path.exists(WATCHLIST_FILE):
             with open(WATCHLIST_FILE, 'r') as f:
                 data = json.load(f)
-                saved_config = data.get('_config', {})
-                if saved_config!= current_config:
-                    print("Config changed. Clearing watchlist.", flush=True)
-                    WATCHLIST = {}
-                    save_watchlist()
-                else:
-                    WATCHLIST = data.get('coins', {})
+                WATCHLIST = data.get('coins', {})
 
-                    # Auto migration: purane coins mein last_state add karo
-                    for symbol in WATCHLIST:
-                        if 'last_state' not in WATCHLIST[symbol]:
-                            WATCHLIST[symbol]['last_state'] = 'not_short'
+                # Auto migration: purane coins mein last_state add karo
+                for symbol in WATCHLIST:
+                    if 'last_state' not in WATCHLIST[symbol]:
+                        WATCHLIST[symbol]['last_state'] = 'not_short'
 
-                    print(f"Loaded {len(WATCHLIST)} coins from watchlist.json", flush=True)
+                print(f"Loaded {len(WATCHLIST)} coins from watchlist.json", flush=True)
         else:
             WATCHLIST = {}
     except Exception as e:
         print(f"Load watchlist error: {e}", flush=True)
         WATCHLIST = {}
-
+        
 def save_watchlist():
     try:
         data = {'_config': {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}, 'coins': WATCHLIST}
