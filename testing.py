@@ -428,6 +428,6 @@ if __name__ == '__main__':
     print(f"CHAT_ID set: {bool(TELEGRAM_CHAT_ID)}", flush=True)
     print(f"CoinDCX pairs: {len(COINDX_FUTURES)}", flush=True)
     load_watchlist()
-    threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
+    #threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
