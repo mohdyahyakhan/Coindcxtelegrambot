@@ -10,12 +10,13 @@ import math
 
 app = Flask(__name__)
 
-PUMP_PERCENT_24H = 40 # testing ke liye 10 rakha, baad me 40 kar dena
+PUMP_PERCENT_24H = 40
 WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
 WATCHLIST_FILE = "watchlist.json"
+PAPER_TRADES_FILE = "paper_trades.json"
 
 COINDX_FUTURES = {
     '0GUSDT', '00000MOGUSDT', '00BONKUSDT', '00CATUSDT', '00FLOKIUSDT',
@@ -85,30 +86,27 @@ COINDX_FUTURES = {
 }
 
 WATCHLIST = {}
+PAPER_TRADES = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 
 def load_watchlist():
     global WATCHLIST
-    current_config = {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}
     try:
         if os.path.exists(WATCHLIST_FILE):
             with open(WATCHLIST_FILE, 'r') as f:
                 data = json.load(f)
                 WATCHLIST = data.get('coins', {})
-
-                # Auto migration: purane coins mein last_state add karo
                 for symbol in WATCHLIST:
                     if 'last_state' not in WATCHLIST[symbol]:
                         WATCHLIST[symbol]['last_state'] = 'not_short'
-
                 print(f"Loaded {len(WATCHLIST)} coins from watchlist.json", flush=True)
         else:
             WATCHLIST = {}
     except Exception as e:
         print(f"Load watchlist error: {e}", flush=True)
         WATCHLIST = {}
-        
+
 def save_watchlist():
     try:
         data = {'_config': {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}, 'coins': WATCHLIST}
@@ -116,6 +114,26 @@ def save_watchlist():
             json.dump(data, f)
     except Exception as e:
         print(f"Save watchlist error: {e}", flush=True)
+
+def load_paper_trades():
+    global PAPER_TRADES
+    try:
+        if os.path.exists(PAPER_TRADES_FILE):
+            with open(PAPER_TRADES_FILE, 'r') as f:
+                PAPER_TRADES = json.load(f)
+                print(f"Loaded {len(PAPER_TRADES)} paper trades", flush=True)
+        else:
+            PAPER_TRADES = {}
+    except Exception as e:
+        print(f"Load paper trades error: {e}", flush=True)
+        PAPER_TRADES = {}
+
+def save_paper_trades():
+    try:
+        with open(PAPER_TRADES_FILE, 'w') as f:
+            json.dump(PAPER_TRADES, f)
+    except Exception as e:
+        print(f"Save paper trades error: {e}", flush=True)
 
 def send_telegram(msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -135,7 +153,6 @@ def process_pump_alert(symbol, change_24h, price, source, alerted_symbols):
         return
     alerted_symbols.add(symbol)
     if symbol not in WATCHLIST:
-        # last_state add kiya taaki crossover track ho sake
         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
     else:
         WATCHLIST[symbol]['time'] = time.time()
@@ -195,13 +212,11 @@ def calculate_supertrend(df, period=10, multiplier=3):
             df.loc[df.index[i], 'st_line'] = df['final_lowerband'].iloc[i]
         else:
             df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
-    
-    # CoinDCX jaisa EMA 300 + 9 SMA smoothing
+
     ema_raw = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
-    
     return df
-    
+
 def get_klines_bybit(symbol, interval='5', limit=351):
     url = "https://api.bybit.com/v5/market/kline"
     params = {'category': 'linear', 'symbol': symbol, 'interval': interval, 'limit': limit}
@@ -229,7 +244,6 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
         res = requests.get(url, params=params, timeout=15)
         data = res.json()
         if not data or not isinstance(data, list):
-            print(f"CoinDCX no data for {symbol}", flush=True)
             return None
         df = pd.DataFrame(data)
         df = df.rename(columns={'time': 'timestamp'})
@@ -242,7 +256,6 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
         df = df.sort_values('timestamp').reset_index(drop=True)
         df = df.iloc[:-1].reset_index(drop=True)
         if len(df) < EMA_PERIOD + 50:
-            print(f"CoinDCX: {symbol} sirf {len(df)} candles", flush=True)
             return None
         return df
     except Exception as e:
@@ -253,11 +266,37 @@ def get_klines(symbol, interval='5'):
     df = get_klines_bybit(symbol, interval=interval)
     if df is not None:
         return df
-    print(f"Bot2: {symbol} Bybit pe nahi mila — CoinDCX try kar raha hoon...", flush=True)
     df = get_klines_coindcx(symbol, interval=f"{interval}m")
-    if df is not None:
-        print(f"Bot2: {symbol} CoinDCX se data mila ✅", flush=True)
     return df
+
+def check_paper_trades(df, symbol):
+    if symbol not in PAPER_TRADES:
+        return
+    trade = PAPER_TRADES[symbol]
+    if trade['status']!= 'OPEN':
+        return
+    current_price = df['close'].iloc[-1]
+    tp = trade['tp']
+    sl = trade['sl']
+    cdcx_name = symbol.replace('USDT', '-USDT')
+
+    if current_price <= tp:
+        pnl = ((trade['entry'] - tp) / trade['entry']) * 100
+        trade['status'] = 'CLOSED_TP'
+        trade['exit'] = tp
+        trade['pnl'] = round(pnl, 2)
+        trade['exit_time'] = time.time()
+        send_telegram(f"✅ <b>PAPER TRADE CLOSED</b> ✅\n\n<b>Coin:</b> {cdcx_name}\n<b>Result:</b> TP Hit\n<b>PnL:</b> +{pnl:.2f}%")
+        print(f"Paper Trade TP: {cdcx_name} +{pnl:.2f}%", flush=True)
+    elif current_price >= sl:
+        pnl = ((trade['entry'] - sl) / trade['entry']) * 100
+        trade['status'] = 'CLOSED_SL'
+        trade['exit'] = sl
+        trade['pnl'] = round(pnl, 2)
+        trade['exit_time'] = time.time()
+        send_telegram(f"❌ <b>PAPER TRADE CLOSED</b> ❌\n\n<b>Coin:</b> {cdcx_name}\n<b>Result:</b> SL Hit\n<b>PnL:</b> {pnl:.2f}%")
+        print(f"Paper Trade SL: {cdcx_name} {pnl:.2f}%", flush=True)
+    save_paper_trades()
 
 def bot1_scan_bybit_futures():
     print("Bot1 started — Dual Source (Bybit + CoinDCX)", flush=True)
@@ -292,7 +331,6 @@ def bot1_scan_bybit_futures():
                 print(f"Bot1 Bybit Error: {e}", flush=True)
             try:
                 coindcx_only = COINDX_FUTURES - bybit_symbols_found
-                print(f"Bot1 [CoinDCX]: {len(coindcx_only)} coins scan kar raha hoon...", flush=True)
                 url = "https://api.coindcx.com/exchange/ticker"
                 res = requests.get(url, timeout=20).json()
                 cdcx_map = {}
@@ -310,12 +348,10 @@ def bot1_scan_bybit_futures():
                     try:
                         change_24h = float(ticker.get('change_24_hour', ticker.get('change_24h', 0)))
                         price = ticker.get('last_price', '0')
-                        print(f"DEBUG CoinDCX {symbol}: change={change_24h}% price={price}", flush=True)
                         if change_24h >= PUMP_PERCENT_24H:
                             process_pump_alert(symbol, change_24h, price, 'CoinDCX Futures', alerted_symbols)
                             pumped_cdcx += 1
                     except Exception as e:
-                        print(f"CoinDCX parse error {symbol}: {e}", flush=True)
                         continue
                 print(f"Bot1 [CoinDCX]: Scan complete | Pumped: {pumped_cdcx}", flush=True)
             except Exception as e:
@@ -357,53 +393,54 @@ def bot2_supertrend_short():
                     print(f"Bot2: [{cdcx_name}] SKIP — NaN", flush=True)
                     continue
 
-                # Current state nikal
+                # Check existing paper trades first
+                check_paper_trades(df, symbol)
+
                 price_below_st = close_price < st_line
                 st_below_ema = st_line < ema_val
                 current_short = price_below_st and st_below_ema
-
-                # Reset state: price wapas dono ke upar gaya
                 reset_state = (close_price > st_line) and (st_line > ema_val)
-
                 last_state = info.get('last_state', 'reset')
-
-                # Naya cross tabhi bane jab pehle reset tha aur ab short hua
                 new_cross = (last_state == 'reset' and current_short == True)
 
-                print(f"Bot2: [{cdcx_name}] Price={close_price:.6f} | ST={st_line:.6f} | EMA{EMA_PERIOD}={ema_val:.6f} | SHORT={current_short} | RESET={reset_state} | NEW_CROSS={new_cross}", flush=True)
+                print(f"Bot2: [{cdcx_name}] Price={close_price:.6f} | ST={st_line:.6f} | EMA{EMA_PERIOD}={ema_val:.6f} | SHORT={current_short} | NEW_CROSS={new_cross}", flush=True)
 
-                # Sirf naye cross pe alert
                 if new_cross:
                     cross_count = info.get('cross_count', 0)
                     if cross_count >= 3:
                         print(f"Bot2: [{cdcx_name}] Limit 3/3 reach — skip", flush=True)
                     else:
+                        tp_price = round(close_price * 0.95, 6)
+                        sl_price = round(close_price * 1.02, 6)
+
+                        # Paper trade entry
+                        PAPER_TRADES[symbol] = {
+                            'entry': close_price,
+                            'tp': tp_price,
+                            'sl': sl_price,
+                            'status': 'OPEN',
+                            'time': time.time()
+                        }
+                        save_paper_trades()
+
                         msg = (
-                            f"🔻 <b>BOT 2: SHORT SIGNAL #{cross_count + 1}</b> 🔻\n\n"
+                            f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n"
                             f"<b>Coin:</b> {cdcx_name}\n"
-                            f"<b>Condition:</b> Price &lt; ST &lt; EMA{EMA_PERIOD}\n"
                             f"<b>Signal:</b> #{cross_count + 1}/3\n"
-                            f"<b>Timeframe:</b> 5min\n"
-                            f"<b>Price:</b> ${close_price:.6f}\n"
-                            f"<b>ST(10,3):</b> ${st_line:.6f}\n"
-                            f"<b>EMA{EMA_PERIOD}:</b> ${ema_val:.6f}\n\n"
-                            f"📊 Price &lt; Supertrend &lt; EMA{EMA_PERIOD}\n"
-                            f"🎯 CoinDCX Futures pe SHORT entry zone.\n"
-                            f"🛑 SL: ST ke upar → ${st_line:.6f}"
+                            f"<b>Entry:</b> ${close_price:.6f}\n"
+                            f"<b>TP 5%:</b> ${tp_price}\n"
+                            f"<b>SL 2%:</b> ${sl_price}\n\n"
+                            f"Price &lt; ST &lt; EMA{EMA_PERIOD}"
                         )
                         send_telegram(msg)
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
-                        print(f"Bot2: [{cdcx_name}] ✅ SHORT ALERT #{cross_count + 1}!", flush=True)
+                        print(f"Bot2: [{cdcx_name}] ✅ PAPER SHORT #{cross_count + 1} @ {close_price:.6f}", flush=True)
 
-                # State update
                 if current_short:
                     WATCHLIST[symbol]['last_state'] = 'short'
                 elif reset_state:
                     WATCHLIST[symbol]['last_state'] = 'reset'
-                # beech ka zone hai toh state same rahegi
-
                 save_watchlist()
-
                 time.sleep(1)
             for symbol in to_remove:
                 WATCHLIST.pop(symbol, None)
@@ -417,17 +454,22 @@ def bot2_supertrend_short():
 
 @app.route('/')
 def home():
-    return f"Bot running. Watchlist: {len(WATCHLIST)} coins. Dual Source: Bybit + CoinDCX"
+    open_trades = sum(1 for t in PAPER_TRADES.values() if t['status'] == 'OPEN')
+    return f"Bot running. Watchlist: {len(WATCHLIST)} coins. Open Paper Trades: {open_trades}"
 
 @app.route('/watchlist')
 def show_watchlist():
     return jsonify(WATCHLIST)
 
+@app.route('/papertrades')
+def show_papertrades():
+    return jsonify(PAPER_TRADES)
+
 if __name__ == '__main__':
     print(f"BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
     print(f"CHAT_ID set: {bool(TELEGRAM_CHAT_ID)}", flush=True)
-    print(f"CoinDCX pairs: {len(COINDX_FUTURES)}", flush=True)
     load_watchlist()
-    #threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
+    load_paper_trades()
+    # threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start() # Bot1 band
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
