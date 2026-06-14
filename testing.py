@@ -158,17 +158,9 @@ def process_pump_alert(symbol, change_24h, price, source, alerted_symbols):
         WATCHLIST[symbol]['time'] = time.time()
     save_watchlist()
     cdcx_name = symbol.replace('USDT', '-USDT')
-    msg = (
-        f"🚨 <b>BOT 1: 24H PUMP ALERT</b> 🚨\n\n"
-        f"<b>Coin:</b> {cdcx_name}\n"
-        f"<b>24h Change:</b> +{change_24h:.2f}%\n"
-        f"<b>Price:</b> ${price}\n"
-        f"<b>Source:</b> {source}\n\n"
-        f"👀 Bot2 watchlist mein add kiya.\n"
-        f"⏳ {WATCHLIST_DAYS} din tak monitor karega."
-    )
-    send_telegram(msg)
-    print(f"Bot1 Alert [{source}]: {cdcx_name} {change_24h:.2f}%", flush=True)
+
+    # Bot1 ka Telegram alert band - sirf log me dikhega
+    print(f"Bot1 [{source}]: {cdcx_name} +{change_24h:.2f}% added to watchlist, no TG alert", flush=True)
 
 def calculate_supertrend(df, period=10, multiplier=3):
     df = df.copy()
@@ -393,7 +385,6 @@ def bot2_supertrend_short():
                     print(f"Bot2: [{cdcx_name}] SKIP — NaN", flush=True)
                     continue
 
-                # Check existing paper trades first
                 check_paper_trades(df, symbol)
 
                 price_below_st = close_price < st_line
@@ -413,7 +404,6 @@ def bot2_supertrend_short():
                         tp_price = round(close_price * 0.95, 6)
                         sl_price = round(close_price * 1.02, 6)
 
-                        # Paper trade entry
                         PAPER_TRADES[symbol] = {
                             'entry': close_price,
                             'tp': tp_price,
@@ -470,6 +460,6 @@ if __name__ == '__main__':
     print(f"CHAT_ID set: {bool(TELEGRAM_CHAT_ID)}", flush=True)
     load_watchlist()
     load_paper_trades()
-    # threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start() # Bot1 band
+    threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
