@@ -325,6 +325,8 @@ def bot1_scan_bybit_futures():
                 coindcx_only = COINDX_FUTURES - bybit_symbols_found
                 url = "https://api.coindcx.com/exchange/ticker"
                 res = requests.get(url, timeout=20).json()
+                # YEH LINE ADD KAR - DEKHNE KE LIYE KYA AA RAHA
+                print(f"Bot1 Debug: CoinDCX returned {len(res)} tickers. Sample: {[t['market'] for t in res[:5]]}", flush=True)
                 cdcx_map = {}
                 for t in res:
                     market = t.get('market', '')
