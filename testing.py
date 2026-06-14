@@ -292,8 +292,8 @@ def check_paper_trades(df, symbol):
 
 def bot1_scan_bybit_futures():
     print("Bot1 started — Dual Source (Bybit + CoinDCX)", flush=True)
-    alerted_symbols = set()
     while True:
+        alerted_symbols = set() # Yaha move kiya - har 5 min me reset
         try:
             bybit_symbols_found = set()
             try:
@@ -335,12 +335,14 @@ def bot1_scan_bybit_futures():
                 pumped_cdcx = 0
                 for symbol in coindcx_only:
                     if symbol not in cdcx_map:
+                        print(f"Bot1 Debug: {symbol} not found in CoinDCX response", flush=True) # Debug
                         continue
                     ticker = cdcx_map[symbol]
                     try:
                         change_24h = float(ticker.get('change_24_hour', ticker.get('change_24h', 0)))
                         price = ticker.get('last_price', '0')
                         if change_24h >= PUMP_PERCENT_24H:
+                            print(f"Bot1 Debug: Found pump {symbol} {change_24h:.2f}%", flush=True) # Debug
                             process_pump_alert(symbol, change_24h, price, 'CoinDCX Futures', alerted_symbols)
                             pumped_cdcx += 1
                     except Exception as e:
@@ -352,7 +354,7 @@ def bot1_scan_bybit_futures():
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
         time.sleep(300)
-
+        
 def bot2_supertrend_short():
     print("Bot2 started", flush=True)
     while True:
