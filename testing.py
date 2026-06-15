@@ -17,6 +17,7 @@ ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
 WATCHLIST_FILE = "watchlist.json"
 PAPER_TRADES_FILE = "paper_trades.json"
+PNL_FILE = "lifetime_pnl.json" # ADDED
 
 COINDX_FUTURES = {
     '0GUSDT', '00000MOGUSDT', '00BONKUSDT', '00CATUSDT', '00FLOKIUSDT',
@@ -89,6 +90,21 @@ WATCHLIST = {}
 PAPER_TRADES = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
+
+# ADDED: Lifetime PnL load/save functions
+def load_total_pnl():
+    if os.path.exists(PNL_FILE):
+        with open(PNL_FILE, "r") as f:
+            data = json.load(f)
+            return data.get("total_pnl", 0.0)
+    return 0.0
+
+def save_total_pnl(value):
+    with open(PNL_FILE, "w") as f:
+        json.dump({"total_pnl": value}, f)
+
+total_pnl_lifetime = load_total_pnl()
+print(f"Loaded Lifetime PnL: {total_pnl_lifetime:.2f}%", flush=True)
 
 def load_watchlist():
     global WATCHLIST
@@ -260,6 +276,7 @@ def get_klines(symbol, interval='5'):
     return df
 
 def check_paper_trades(df, symbol):
+    global total_pnl_lifetime # ADDED
     if symbol not in PAPER_TRADES:
         return
     trade = PAPER_TRADES[symbol]
@@ -279,12 +296,16 @@ def check_paper_trades(df, symbol):
         trade['pnl'] = round(pnl, 2)
         trade['exit_time'] = time.time()
 
+        total_pnl_lifetime += pnl # ADDED
+        save_total_pnl(total_pnl_lifetime) # ADDED
+
         msg = (
             f"✅ <b>TRADE CLOSED - TARGET HIT</b> ✅\n\n"
             f"<b>Coin:</b> {cdcx_name}\n"
             f"<b>Entry:</b> ${trade['entry']:.6f}\n"
             f"<b>Exit TP:</b> ${tp:.6f}\n"
             f"<b>PnL:</b> +{pnl:.2f}%\n"
+            f"<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%\n" # ADDED
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
@@ -298,12 +319,16 @@ def check_paper_trades(df, symbol):
         trade['pnl'] = round(pnl, 2)
         trade['exit_time'] = time.time()
 
+        total_pnl_lifetime += pnl # ADDED
+        save_total_pnl(total_pnl_lifetime) # ADDED
+
         msg = (
             f"❌ <b>TRADE CLOSED - SL HIT</b> ❌\n\n"
             f"<b>Coin:</b> {cdcx_name}\n"
             f"<b>Entry:</b> ${trade['entry']:.6f}\n"
             f"<b>Exit SL:</b> ${sl:.6f}\n"
             f"<b>PnL:</b> {pnl:.2f}%\n"
+            f"<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%\n" # ADDED
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
@@ -469,7 +494,7 @@ def bot2_supertrend_short():
 @app.route('/')
 def home():
     open_trades = sum(1 for t in PAPER_TRADES.values() if t['status'] == 'OPEN')
-    return f"Bot running. Watchlist: {len(WATCHLIST)} coins. Open Paper Trades: {open_trades}"
+    return f"Bot running. Watchlist: {len(WATCHLIST)} coins. Open Paper Trades: {open_trades}. Lifetime PnL: {total_pnl_lifetime:.2f}%"
 
 @app.route('/watchlist')
 def show_watchlist():
