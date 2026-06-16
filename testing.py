@@ -168,13 +168,16 @@ def process_pump_alert(symbol, change_24h, price, source, alerted_symbols):
     if symbol in alerted_symbols:
         return
     alerted_symbols.add(symbol)
+    cdcx_name = symbol.replace('USDT', '-USDT')
+    
     if symbol not in WATCHLIST:
         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
+        save_watchlist()
+        print(f"Bot1 [{source}]: {cdcx_name} +{change_24h:.2f}% added to watchlist, no TG alert", flush=True)
     else:
         WATCHLIST[symbol]['time'] = time.time()
-    save_watchlist()
-    cdcx_name = symbol.replace('USDT', '-USDT')
-    print(f"Bot1 [{source}]: {cdcx_name} +{change_24h:.2f}% added to watchlist, no TG alert", flush=True)
+        save_watchlist()
+        print(f"Bot1 [{source}]: {cdcx_name} +{change_24h:.2f}% still pumping, already in watchlist", flush=True)
 
 def calculate_supertrend(df, period=10, multiplier=3):
     df = df.copy()
