@@ -29,7 +29,7 @@ COINDX_FUTURES = {
     'ACHUSDT', 'ACTUSDT', 'ACUUSDT', 'ACXUSDT', 'ADAUSDT', 'AEROUSDT', 'AEVOUSDT',
     'AGLDUSDT', 'AIGENSYNUSDT', 'AIXBTUSDT', 'AKTUSDT', 'ALCHUSDT', 'ALGOUSDT',
     'ALICEUSDT', 'ALLOUSDT', 'ALPINEUSDT', 'ALTUSDT', 'ANIMEUSDT', 'APEUSDT',
-    'API3USDT', 'APTUSDT', 'ARUSDT', 'ARBUSDT', 'ARCUSDT', 'ARKUSDT', 'ARKMUSDT',
+    'API3USDT', 'APTUSDT', 'ARUSDT', 'ARBUSDT', 'ARCUSDT', 'ARKMUSDT',
     'ARPAUSDT', 'ASRUSDT', 'ASTERUSDT', 'ASTRUSDT', 'ATUSDT', 'ATHUSDT', 'ATOMUSDT',
     'AUCTIONUSDT', 'AVAUSDT', 'AVAAIUSDT', 'AVAXUSDT', 'AVNTUSDT', 'AWEUSDT',
     'AXLUSDT', 'AXSUSDT', 'BABYUSDT', 'BANANAUSDT', 'BANANAS31USDT',
@@ -133,8 +133,15 @@ def load_watchlist():
         WATCHLIST = {}
 
 def save_watchlist():
-    data = {'_config': {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}, 'coins': WATCHLIST}
-    gist_save('watchlist.json', data)
+    # Safety check: Agar watchlist khali hai to Gist me save mat karo
+    if not WATCHLIST:
+        print("Watchlist empty, skipping Gist save to prevent overwrite", flush=True)
+        return
+    try:
+        data = {'_config': {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}, 'coins': WATCHLIST}
+        gist_save('watchlist.json', data)
+    except Exception as e:
+        print(f"Save watchlist error: {e}", flush=True)
 
 # ===== PAPER TRADES =====
 def load_paper_trades():
