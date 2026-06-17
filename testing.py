@@ -15,9 +15,12 @@ WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
-WATCHLIST_FILE = "watchlist.json"
-PAPER_TRADES_FILE = "paper_trades.json"
-PNL_FILE = "lifetime_pnl.json" # ADDED
+
+# GIST CONFIG - Yahi GIST_ID use karna hai
+GIST_ID = "5ef25a569ac5dcb8b1a7425aab22cced"
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
+GIST_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"}
+GIST_URL = f"https://api.github.com/gists/{GIST_ID}"
 
 COINDX_FUTURES = {
     '0GUSDT', '00000MOGUSDT', '00BONKUSDT', '00CATUSDT', '00FLOKIUSDT',
@@ -29,7 +32,7 @@ COINDX_FUTURES = {
     'API3USDT', 'APTUSDT', 'ARUSDT', 'ARBUSDT', 'ARCUSDT', 'ARKUSDT', 'ARKMUSDT',
     'ARPAUSDT', 'ASRUSDT', 'ASTERUSDT', 'ASTRUSDT', 'ATUSDT', 'ATHUSDT', 'ATOMUSDT',
     'AUCTIONUSDT', 'AVAUSDT', 'AVAAIUSDT', 'AVAXUSDT', 'AVNTUSDT', 'AWEUSDT',
-    'AXLUSDT', 'AXSUSDT', 'BABYUSDT', 'BANUSDT', 'BANANAUSDT', 'BANANAS31USDT',
+    'AXLUSDT', 'AXSUSDT', 'BABYUSDT', 'BANANAUSDT', 'BANANAS31USDT',
     'BANDUSDT', 'BARDUSDT', 'BASEDUSDT', 'BATUSDT', 'BBUSDT', 'BCHUSDT', 'BELUSDT',
     'BERAUSDT', 'BICOUSDT', 'BIGTIMEUSDT', 'BILLUSDT', 'BIOUSDT', 'BIRBUSDT',
     'BLURUSDT', 'BMTUSDT', 'BNBUSDT', 'BNTUSDT', 'BOMEUSDT', 'BRETTUSDT', 'BREVUSDT',
@@ -56,7 +59,7 @@ COINDX_FUTURES = {
     'LINEAUSDT', 'LINKUSDT', 'LISTAUSDT', 'LITUSDT', 'LPTUSDT', 'LQTYUSDT', 'LSKUSDT',
     'LUMIAUSDT', 'LUNA2USDT', 'LTCUSDT', 'MAGICUSDT', 'MAGMAUSDT', 'MANAUSDT', 'MANTAUSDT',
     'MANTRAUSDT', 'MASKUSDT', 'MAVUSDT', 'MAVIAUSDT', 'MBOXUSDT', 'MEUSDT', 'MEGAUSDT',
-    'MELANIAUSDT', 'MEMEUSDT', 'MERLUSDT', 'METUSDT', 'METISUSDT', 'MEWUSDT', 'MINAUSDT',
+    'MELANIAUSDT', 'MEMEUSDT', 'MERLUSDT', 'METISUSDT', 'MEWUSDT', 'MINAUSDT',
     'MIRAUSDT', 'MITOUSDT', 'MMTUSDT', 'MOCAUSDT', 'MONUSDT', 'MOODENGUSDT', 'MORPHOUSDT',
     'MOVEUSDT', 'MOVRUSDT', 'MTLUSDT', 'MUBARAKUSDT', 'NATGASUSDT', 'NEARUSDT', 'NEOUSDT',
     'NEWTUSDT', 'NFPUSDT', 'NIGHTUSDT', 'NILUSDT', 'NMRUSDT', 'NOMUSDT', 'NOTUSDT',
@@ -90,66 +93,80 @@ WATCHLIST = {}
 PAPER_TRADES = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
+total_pnl_lifetime = 0.0
 
-# ADDED: Lifetime PnL load/save functions
-def load_total_pnl():
-    if os.path.exists(PNL_FILE):
-        with open(PNL_FILE, "r") as f:
-            data = json.load(f)
-            return data.get("total_pnl", 0.0)
-    return 0.0
+# ===== GIST HELPER FUNCTIONS =====
+def gist_get(filename):
+    try:
+        res = requests.get(GIST_URL, headers=GIST_HEADERS, timeout=10).json()
+        content = res['files'][filename]['content']
+        return json.loads(content)
+    except Exception as e:
+        print(f"Gist GET error {filename}: {e}", flush=True)
+        return {}
 
-def save_total_pnl(value):
-    with open(PNL_FILE, "w") as f:
-        json.dump({"total_pnl": value}, f)
+def gist_save(filename, data):
+    try:
+        payload = {
+            "files": {
+                filename: {
+                    "content": json.dumps(data, indent=2)
+                }
+            }
+        }
+        requests.patch(GIST_URL, headers=GIST_HEADERS, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Gist SAVE error {filename}: {e}", flush=True)
 
-total_pnl_lifetime = load_total_pnl()
-print(f"Loaded Lifetime PnL: {total_pnl_lifetime:.2f}%", flush=True)
-
+# ===== WATCHLIST =====
 def load_watchlist():
     global WATCHLIST
     try:
-        if os.path.exists(WATCHLIST_FILE):
-            with open(WATCHLIST_FILE, 'r') as f:
-                data = json.load(f)
-                WATCHLIST = data.get('coins', {})
-                for symbol in WATCHLIST:
-                    if 'last_state' not in WATCHLIST[symbol]:
-                        WATCHLIST[symbol]['last_state'] = 'not_short'
-                print(f"Loaded {len(WATCHLIST)} coins from watchlist.json", flush=True)
-        else:
-            WATCHLIST = {}
+        data = gist_get('watchlist.json')
+        WATCHLIST = data.get('coins', {})
+        for symbol in WATCHLIST:
+            if 'last_state' not in WATCHLIST[symbol]:
+                WATCHLIST[symbol]['last_state'] = 'not_short'
+        print(f"Loaded {len(WATCHLIST)} coins from Gist", flush=True)
     except Exception as e:
         print(f"Load watchlist error: {e}", flush=True)
         WATCHLIST = {}
 
 def save_watchlist():
-    try:
-        data = {'_config': {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}, 'coins': WATCHLIST}
-        with open(WATCHLIST_FILE, 'w') as f:
-            json.dump(data, f)
-    except Exception as e:
-        print(f"Save watchlist error: {e}", flush=True)
+    data = {'_config': {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}, 'coins': WATCHLIST}
+    gist_save('watchlist.json', data)
 
+# ===== PAPER TRADES =====
 def load_paper_trades():
     global PAPER_TRADES
     try:
-        if os.path.exists(PAPER_TRADES_FILE):
-            with open(PAPER_TRADES_FILE, 'r') as f:
-                PAPER_TRADES = json.load(f)
-                print(f"Loaded {len(PAPER_TRADES)} paper trades", flush=True)
-        else:
-            PAPER_TRADES = {}
+        data = gist_get('paper_trades.json')
+        PAPER_TRADES = data.get('trades', {})
+        print(f"Loaded {len(PAPER_TRADES)} paper trades from Gist", flush=True)
     except Exception as e:
         print(f"Load paper trades error: {e}", flush=True)
         PAPER_TRADES = {}
 
 def save_paper_trades():
+    data = {'trades': PAPER_TRADES}
+    gist_save('paper_trades.json', data)
+
+# ===== LIFETIME PNL =====
+def load_total_pnl():
+    global total_pnl_lifetime
     try:
-        with open(PAPER_TRADES_FILE, 'w') as f:
-            json.dump(PAPER_TRADES, f)
+        data = gist_get('lifetime_pnl.json')
+        total_pnl_lifetime = data.get('total_pnl', 0.0)
+        print(f"Loaded Lifetime PnL: {total_pnl_lifetime:.2f}%", flush=True)
     except Exception as e:
-        print(f"Save paper trades error: {e}", flush=True)
+        print(f"Load PnL error: {e}", flush=True)
+        total_pnl_lifetime = 0.0
+
+def save_total_pnl(value):
+    global total_pnl_lifetime
+    total_pnl_lifetime = value
+    data = {'total_pnl': total_pnl_lifetime}
+    gist_save('lifetime_pnl.json', data)
 
 def send_telegram(msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -169,7 +186,7 @@ def process_pump_alert(symbol, change_24h, price, source, alerted_symbols):
         return
     alerted_symbols.add(symbol)
     cdcx_name = symbol.replace('USDT', '-USDT')
-    
+
     if symbol not in WATCHLIST:
         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
         save_watchlist()
@@ -279,7 +296,7 @@ def get_klines(symbol, interval='5'):
     return df
 
 def check_paper_trades(df, symbol):
-    global total_pnl_lifetime # ADDED
+    global total_pnl_lifetime
     if symbol not in PAPER_TRADES:
         return
     trade = PAPER_TRADES[symbol]
@@ -299,8 +316,7 @@ def check_paper_trades(df, symbol):
         trade['pnl'] = round(pnl, 2)
         trade['exit_time'] = time.time()
 
-        total_pnl_lifetime += pnl # ADDED
-        save_total_pnl(total_pnl_lifetime) # ADDED
+        save_total_pnl(total_pnl_lifetime + pnl)
 
         msg = (
             f"✅ <b>TRADE CLOSED - TARGET HIT</b> ✅\n\n"
@@ -308,7 +324,7 @@ def check_paper_trades(df, symbol):
             f"<b>Entry:</b> ${trade['entry']:.6f}\n"
             f"<b>Exit TP:</b> ${tp:.6f}\n"
             f"<b>PnL:</b> +{pnl:.2f}%\n"
-            f"<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%\n" # ADDED
+            f"<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%\n"
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
@@ -322,8 +338,7 @@ def check_paper_trades(df, symbol):
         trade['pnl'] = round(pnl, 2)
         trade['exit_time'] = time.time()
 
-        total_pnl_lifetime += pnl # ADDED
-        save_total_pnl(total_pnl_lifetime) # ADDED
+        save_total_pnl(total_pnl_lifetime + pnl)
 
         msg = (
             f"❌ <b>TRADE CLOSED - SL HIT</b> ❌\n\n"
@@ -331,7 +346,7 @@ def check_paper_trades(df, symbol):
             f"<b>Entry:</b> ${trade['entry']:.6f}\n"
             f"<b>Exit SL:</b> ${sl:.6f}\n"
             f"<b>PnL:</b> {pnl:.2f}%\n"
-            f"<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%\n" # ADDED
+            f"<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%\n"
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
@@ -510,8 +525,10 @@ def show_papertrades():
 if __name__ == '__main__':
     print(f"BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
     print(f"CHAT_ID set: {bool(TELEGRAM_CHAT_ID)}", flush=True)
+    print(f"GITHUB_TOKEN set: {bool(GITHUB_TOKEN)}", flush=True)
     load_watchlist()
     load_paper_trades()
+    load_total_pnl()
     threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
