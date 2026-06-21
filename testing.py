@@ -107,15 +107,16 @@ def send_ntfy_plain(msg):
     except Exception as e:
         print(f"ntfy Error: {e}", flush=True)
 
-# ===== GIST HELPER FUNCTIONS =====
+# ===== GIST HELPER FUNCTIONS - UPDATED =====
 def gist_get(filename):
     try:
         res = requests.get(GIST_URL, headers=GIST_HEADERS, timeout=10).json()
         content = res['files'][filename]['content']
-        return json.loads(content)
+        data = json.loads(content)
+        return data
     except Exception as e:
         print(f"Gist GET error {filename}: {e}", flush=True)
-        return {}
+        return None
 
 def gist_save(filename, data):
     try:
@@ -130,62 +131,61 @@ def gist_save(filename, data):
     except Exception as e:
         print(f"Gist SAVE error {filename}: {e}", flush=True)
 
-# ===== WATCHLIST =====
+# ===== WATCHLIST - UPDATED =====
 def load_watchlist():
     global WATCHLIST
-    try:
-        data = gist_get('watchlist.json')
-        coins = data.get('coins', {})
-        if coins: # CHANGE 1: Gist me data hai tabhi load karo
-            WATCHLIST = coins
-            for symbol in WATCHLIST:
-                if 'last_state' not in WATCHLIST[symbol]:
-                    WATCHLIST[symbol]['last_state'] = 'not_short'
-            print(f"Loaded {len(WATCHLIST)} coins from Gist", flush=True)
-        else:
-            print("Gist watchlist empty, keeping memory watchlist", flush=True)
-    except Exception as e:
-        print(f"Load watchlist error: {e}", flush=True)
+    data = gist_get('watchlist.json')
+    if data and 'coins' in data:
+        WATCHLIST = data['coins']
+        for symbol in WATCHLIST:
+            if 'last_state' not in WATCHLIST[symbol]:
+                WATCHLIST[symbol]['last_state'] = 'not_short'
+        print(f"Loaded {len(WATCHLIST)} coins from Gist", flush=True)
+    else:
+        print("Gist watchlist empty or failed, keeping memory watchlist", flush=True)
 
 def save_watchlist():
-    # Safety check: Agar watchlist khali hai to Gist me save mat karo
     if not WATCHLIST:
         print("Watchlist empty, skipping Gist save to prevent overwrite", flush=True)
         return
     try:
+        existing_data = gist_get('watchlist.json')
+        if existing_data and existing_data.get('coins') and not WATCHLIST:
+            print("Prevented overwriting Gist with empty watchlist", flush=True)
+            return
         data = {'_config': {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}, 'coins': WATCHLIST}
         gist_save('watchlist.json', data)
     except Exception as e:
         print(f"Save watchlist error: {e}", flush=True)
 
-# ===== PAPER TRADES =====
+# ===== PAPER TRADES - UPDATED =====
 def load_paper_trades():
     global PAPER_TRADES
-    try:
-        data = gist_get('paper_trades.json')
-        PAPER_TRADES = data.get('trades', {})
+    data = gist_get('paper_trades.json')
+    if data and 'trades' in data:
+        PAPER_TRADES = data['trades']
         print(f"Loaded {len(PAPER_TRADES)} paper trades from Gist", flush=True)
-    except Exception as e:
-        print(f"Load paper trades error: {e}", flush=True)
-        PAPER_TRADES = {}
+    else:
+        print("Gist paper_trades empty or failed, keeping memory", flush=True)
 
 def save_paper_trades():
     data = {'trades': PAPER_TRADES}
     gist_save('paper_trades.json', data)
 
-# ===== LIFETIME PNL =====
+# ===== LIFETIME PNL - UPDATED =====
 def load_total_pnl():
     global total_pnl_lifetime
-    try:
-        data = gist_get('lifetime_pnl.json')
-        total_pnl_lifetime = data.get('total_pnl', 0.0)
+    data = gist_get('lifetime_pnl.json')
+    if data and 'total_pnl' in data:
+        total_pnl_lifetime = data['total_pnl']
         print(f"Loaded Lifetime PnL: {total_pnl_lifetime:.2f}%", flush=True)
-    except Exception as e:
-        print(f"Load PnL error: {e}", flush=True)
-        total_pnl_lifetime = 0.0
+    else:
+        print("Gist PnL empty or failed, keeping memory value", flush=True)
 
 def save_total_pnl(value):
     global total_pnl_lifetime
+    if value == total_pnl_lifetime:
+        return
     total_pnl_lifetime = value
     data = {'total_pnl': total_pnl_lifetime}
     gist_save('lifetime_pnl.json', data)
