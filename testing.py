@@ -95,8 +95,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 total_pnl_lifetime = 0.0
 
-# ===== NTFY FUNCTION =====
-
+# ===== NTFY FUNCTION - UPDATED =====
 def send_ntfy_plain(msg):
     topic = os.environ.get("NTFY_TOPIC")
     if not topic: return
