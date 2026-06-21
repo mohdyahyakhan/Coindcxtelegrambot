@@ -96,11 +96,14 @@ TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 total_pnl_lifetime = 0.0
 
 # ===== NTFY FUNCTION =====
-def send_ntfy(msg):
+
+def send_ntfy_plain(msg):
     topic = os.environ.get("NTFY_TOPIC")
     if not topic: return
+    # HTML tags hata do ntfy ke liye
+    clean_msg = msg.replace('<b>', '').replace('</b>', '').replace('&lt;', '<').replace('&gt;', '>')
     try:
-        requests.post(f"https://ntfy.sh/{topic}", data=msg.encode('utf-8'))
+        requests.post(f"https://ntfy.sh/{topic}", data=clean_msg.encode('utf-8'))
     except Exception as e:
         print(f"ntfy Error: {e}", flush=True)
 
