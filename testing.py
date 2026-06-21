@@ -135,14 +135,17 @@ def load_watchlist():
     global WATCHLIST
     try:
         data = gist_get('watchlist.json')
-        WATCHLIST = data.get('coins', {})
-        for symbol in WATCHLIST:
-            if 'last_state' not in WATCHLIST[symbol]:
-                WATCHLIST[symbol]['last_state'] = 'not_short'
-        print(f"Loaded {len(WATCHLIST)} coins from Gist", flush=True)
+        coins = data.get('coins', {})
+        if coins: # CHANGE 1: Gist me data hai tabhi load karo
+            WATCHLIST = coins
+            for symbol in WATCHLIST:
+                if 'last_state' not in WATCHLIST[symbol]:
+                    WATCHLIST[symbol]['last_state'] = 'not_short'
+            print(f"Loaded {len(WATCHLIST)} coins from Gist", flush=True)
+        else:
+            print("Gist watchlist empty, keeping memory watchlist", flush=True)
     except Exception as e:
         print(f"Load watchlist error: {e}", flush=True)
-        WATCHLIST = {}
 
 def save_watchlist():
     # Safety check: Agar watchlist khali hai to Gist me save mat karo
@@ -347,7 +350,7 @@ def check_paper_trades(df, symbol):
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
-        send_ntfy(msg) # ntfy notification
+        send_ntfy_plain(msg) # ntfy notification
         print(f"Paper Trade TP: {cdcx_name} +{pnl:.2f}% in {duration}min", flush=True)
 
     elif current_price >= sl:
@@ -370,12 +373,13 @@ def check_paper_trades(df, symbol):
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
-        send_ntfy(msg) # ntfy notification
+        send_ntfy_plain(msg) # ntfy notification
         print(f"Paper Trade SL: {cdcx_name} {pnl:.2f}% in {duration}min", flush=True)
 
     save_paper_trades()
 
 def bot1_scan_bybit_futures():
+    load_watchlist() # CHANGE 3: Bot start hote hi dubara load karo
     print("Bot1 started — Dual Source (Bybit + CoinDCX)", flush=True)
     while True:
         alerted_symbols = set()
@@ -511,7 +515,7 @@ def bot2_supertrend_short():
                             f"Price &lt; ST &lt; EMA{EMA_PERIOD}"
                         )
                         send_telegram(msg)
-                        send_ntfy(msg) # ntfy notification
+                        send_ntfy_plain(msg) # ntfy notification
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
                         print(f"Bot2: [{cdcx_name}] ✅ PAPER SHORT #{cross_count + 1} @ {close_price:.6f}", flush=True)
 
@@ -549,9 +553,12 @@ if __name__ == '__main__':
     print(f"CHAT_ID set: {bool(TELEGRAM_CHAT_ID)}", flush=True)
     print(f"GITHUB_TOKEN set: {bool(GITHUB_TOKEN)}", flush=True)
     print(f"NTFY_TOPIC set: {bool(os.environ.get('NTFY_TOPIC'))}", flush=True)
+
+    time.sleep(5) # CHANGE 2: Render ko stable hone do
     load_watchlist()
     load_paper_trades()
     load_total_pnl()
+
     threading.Thread(target=bot1_scan_bybit_futures, daemon=True).start()
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
