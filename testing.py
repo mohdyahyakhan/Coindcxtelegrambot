@@ -95,6 +95,15 @@ TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 total_pnl_lifetime = 0.0
 
+# ===== NTFY FUNCTION =====
+def send_ntfy(msg):
+    topic = os.environ.get("NTFY_TOPIC")
+    if not topic: return
+    try:
+        requests.post(f"https://ntfy.sh/{topic}", data=msg.encode('utf-8'))
+    except Exception as e:
+        print(f"ntfy Error: {e}", flush=True)
+
 # ===== GIST HELPER FUNCTIONS =====
 def gist_get(filename):
     try:
@@ -335,6 +344,7 @@ def check_paper_trades(df, symbol):
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
+        send_ntfy(msg) # ntfy notification
         print(f"Paper Trade TP: {cdcx_name} +{pnl:.2f}% in {duration}min", flush=True)
 
     elif current_price >= sl:
@@ -357,6 +367,7 @@ def check_paper_trades(df, symbol):
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
+        send_ntfy(msg) # ntfy notification
         print(f"Paper Trade SL: {cdcx_name} {pnl:.2f}% in {duration}min", flush=True)
 
     save_paper_trades()
@@ -497,6 +508,7 @@ def bot2_supertrend_short():
                             f"Price &lt; ST &lt; EMA{EMA_PERIOD}"
                         )
                         send_telegram(msg)
+                        send_ntfy(msg) # ntfy notification
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
                         print(f"Bot2: [{cdcx_name}] ✅ PAPER SHORT #{cross_count + 1} @ {close_price:.6f}", flush=True)
 
@@ -533,6 +545,7 @@ if __name__ == '__main__':
     print(f"BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
     print(f"CHAT_ID set: {bool(TELEGRAM_CHAT_ID)}", flush=True)
     print(f"GITHUB_TOKEN set: {bool(GITHUB_TOKEN)}", flush=True)
+    print(f"NTFY_TOPIC set: {bool(os.environ.get('NTFY_TOPIC'))}", flush=True)
     load_watchlist()
     load_paper_trades()
     load_total_pnl()
