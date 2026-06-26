@@ -106,7 +106,7 @@ def get_coindcx_futures_symbols():
     except Exception as e:
         print(f"Bot1: CoinDCX futures list error: {e}", flush=True)
         return set()
-        
+
 # ===== WATCHLIST - FINAL FIX =====
 def load_watchlist():
     global WATCHLIST
@@ -262,8 +262,10 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
     params = {'pair': pair, 'interval': interval, 'limit': limit}
     try:
         res = requests.get(url, params=params, timeout=15)
+        print(f"Bot2 Debug: CoinDCX candles {pair} status={res.status_code}", flush=True)
         data = res.json()
         if not data or not isinstance(data, list):
+            print(f"Bot2 Debug: CoinDCX candles {pair} empty data", flush=True)
             return None
         df = pd.DataFrame(data)
         df = df.rename(columns={'time': 'timestamp'})
@@ -276,6 +278,7 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
         df = df.sort_values('timestamp').reset_index(drop=True)
         df = df.iloc[:-1].reset_index(drop=True)
         if len(df) < EMA_PERIOD + 50:
+            print(f"Bot2 Debug: CoinDCX candles {pair} only {len(df)} rows", flush=True)
             return None
         return df
     except Exception as e:
@@ -391,8 +394,7 @@ def bot1_scan_bybit_futures():
             except Exception as e:
                 print(f"Bot1 Bybit Error: {e}", flush=True)
 
-            
-                        # ===== COINDX SCAN - SIRF JO BYBIT PE NAHI MILE =====
+            # ===== COINDX SCAN - SIRF JO BYBIT PE NAHI MILE =====
             try:
                 coindcx_only = coindcx_futures - bybit_symbols_found
                 url = "https://api.coindcx.com/exchange/ticker"
@@ -433,7 +435,7 @@ def bot1_scan_bybit_futures():
                 print(f"Bot1 [CoinDCX]: {len(coindcx_only)} pairs checked | Pumped: {pumped_cdcx}", flush=True)
             except Exception as e:
                 print(f"Bot1 CoinDCX Error: {e}", flush=True)
-                
+
             print(f"Bot1: Total Watchlist: {len(WATCHLIST)} coins\n", flush=True)
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
@@ -467,7 +469,15 @@ def bot2_supertrend_short():
                 df = get_klines(symbol)
                 if df is None or len(df) < EMA_PERIOD + 2:
                     print(f"Bot2: [{cdcx_name}] SKIP — data nahi mila", flush=True)
+                    # Agar 3 baar lagatar data nahi mila to watchlist se hata do
+                    if info.get('data_fail_count', 0) >= 2:
+                        to_remove.append(symbol)
+                        print(f"Bot2: [{cdcx_name}] 3x fail — watchlist se remove", flush=True)
+                    else:
+                        WATCHLIST[symbol]['data_fail_count'] = info.get('data_fail_count', 0) + 1
                     continue
+                else:
+                    WATCHLIST[symbol]['data_fail_count'] = 0 # Reset on success
                 try:
                     df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
                 except Exception as e:
