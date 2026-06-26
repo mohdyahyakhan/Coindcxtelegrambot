@@ -29,7 +29,7 @@ COINDX_FUTURES = {
     'ACHUSDT', 'ACTUSDT', 'ACUUSDT', 'ACXUSDT', 'ADAUSDT', 'AEROUSDT', 'AEVOUSDT',
     'AGLDUSDT', 'AIGENSYNUSDT', 'AIXBTUSDT', 'AKTUSDT', 'ALCHUSDT', 'ALGOUSDT',
     'ALICEUSDT', 'ALLOUSDT', 'ALPINEUSDT', 'ALTUSDT', 'ANIMEUSDT', 'APEUSDT',
-    'API3USDT', 'APTUSDT', 'ARUSDT', 'ARBUSDT', 'ARCUSDT', 'ARKMUSDT',
+    'API3USDT', 'APTUSDT', 'ARBUSDT', 'ARCUSDT', 'ARKMUSDT',
     'ARPAUSDT', 'ASRUSDT', 'ASTERUSDT', 'ASTRUSDT', 'ATUSDT', 'ATHUSDT', 'ATOMUSDT',
     'AUCTIONUSDT', 'AVAUSDT', 'AVAAIUSDT', 'AVAXUSDT', 'AVNTUSDT', 'AWEUSDT',
     'AXLUSDT', 'AXSUSDT', 'BABYUSDT', 'BANANAUSDT', 'BANANAS31USDT',
@@ -130,16 +130,16 @@ def gist_save(filename, data):
     except Exception as e:
         print(f"Gist SAVE error {filename}: {e}", flush=True)
 
-# ===== WATCHLIST - UPDATED =====
+# ===== WATCHLIST - FIXED FOR ARRAY FORMAT =====
 def load_watchlist():
     global WATCHLIST
     data = gist_get('watchlist.json')
-    if data and 'coins' in data:
-        WATCHLIST = data['coins']
-        for symbol in WATCHLIST:
-            if 'last_state' not in WATCHLIST[symbol]:
-                WATCHLIST[symbol]['last_state'] = 'not_short'
-        print(f"Loaded {len(WATCHLIST)} coins from Gist", flush=True)
+    if data and isinstance(data, list):
+        # Gist mein array hai ["SLXUSDT", "HEIUSDT"] usko dict mein convert karo
+        WATCHLIST = {}
+        for symbol in data:
+            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
+        print(f"Gist watchlist loaded: {len(WATCHLIST)} coins", flush=True)
     else:
         print("Gist watchlist empty or failed, keeping memory watchlist", flush=True)
 
@@ -148,12 +148,10 @@ def save_watchlist():
         print("Watchlist empty, skipping Gist save to prevent overwrite", flush=True)
         return
     try:
-        existing_data = gist_get('watchlist.json')
-        if existing_data and existing_data.get('coins') and not WATCHLIST:
-            print("Prevented overwriting Gist with empty watchlist", flush=True)
-            return
-        data = {'_config': {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}, 'coins': WATCHLIST}
-        gist_save('watchlist.json', data)
+        # Dict se sirf symbols ki list banao Gist ke liye
+        symbol_list = list(WATCHLIST.keys())
+        gist_save('watchlist.json', symbol_list)
+        print(f"Saved {len(symbol_list)} coins to Gist", flush=True)
     except Exception as e:
         print(f"Save watchlist error: {e}", flush=True)
 
@@ -349,7 +347,7 @@ def check_paper_trades(df, symbol):
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
-        send_ntfy_plain(msg) # ntfy notification
+        send_ntfy_plain(msg)
         print(f"Paper Trade TP: {cdcx_name} +{pnl:.2f}% in {duration}min", flush=True)
 
     elif current_price >= sl:
@@ -372,13 +370,13 @@ def check_paper_trades(df, symbol):
             f"<b>Duration:</b> {duration} min"
         )
         send_telegram(msg)
-        send_ntfy_plain(msg) # ntfy notification
+        send_ntfy_plain(msg)
         print(f"Paper Trade SL: {cdcx_name} {pnl:.2f}% in {duration}min", flush=True)
 
     save_paper_trades()
 
 def bot1_scan_bybit_futures():
-    load_watchlist() # CHANGE 3: Bot start hote hi dubara load karo
+    load_watchlist()
     print("Bot1 started — Dual Source (Bybit + CoinDCX)", flush=True)
     while True:
         alerted_symbols = set()
@@ -514,7 +512,7 @@ def bot2_supertrend_short():
                             f"Price &lt; ST &lt; EMA{EMA_PERIOD}"
                         )
                         send_telegram(msg)
-                        send_ntfy_plain(msg) # ntfy notification
+                        send_ntfy_plain(msg)
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
                         print(f"Bot2: [{cdcx_name}] ✅ PAPER SHORT #{cross_count + 1} @ {close_price:.6f}", flush=True)
 
@@ -553,7 +551,7 @@ if __name__ == '__main__':
     print(f"GITHUB_TOKEN set: {bool(GITHUB_TOKEN)}", flush=True)
     print(f"NTFY_TOPIC set: {bool(os.environ.get('NTFY_TOPIC'))}", flush=True)
 
-    time.sleep(5) # CHANGE 2: Render ko stable hone do
+    time.sleep(5)
     load_watchlist()
     load_paper_trades()
     load_total_pnl()
