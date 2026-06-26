@@ -389,7 +389,7 @@ def check_paper_trades(df, symbol):
 
 def bot1_scan_bybit_futures():
     load_watchlist()
-    print("Bot1 started — Dual Source (Bybit + CoinDCX Auto-Detect)", flush=True)
+    print("Bot1 started — Triple Source (Bybit + CoinDCX + Bybit Pump Scan)", flush=True)
     while True:
         alerted_symbols = set()
         try:
@@ -400,7 +400,30 @@ def bot1_scan_bybit_futures():
                 time.sleep(60)
                 continue
 
-            # ===== BYBIT SCAN =====
+            # ===== BYBIT PUMP SCAN - NAYA CODE YAHAN ADD KIYA =====
+            try:
+                url = "https://api.bybit.com/v5/market/tickers"
+                params = {'category': 'linear'}
+                data = requests.get(url, params=params, timeout=20).json()
+                if data['retCode'] == 0:
+                    tickers = data['result']['list']
+                    pumped_bybit = 0
+                    for ticker in tickers:
+                        symbol = ticker['symbol']
+                        if not symbol.endswith('USDT'):
+                            continue
+                        change_24h = float(ticker['price24hPcnt']) * 100
+                        if change_24h >= PUMP_PERCENT_24H:
+                            process_pump_alert(symbol, change_24h, ticker['lastPrice'], 'Bybit Futures', alerted_symbols)
+                            pumped_bybit += 1
+                    print(f"Bot1 [Bybit Pump]: {len(tickers)} pairs checked | Pumped: {pumped_bybit}", flush=True)
+                else:
+                    print(f"Bot1 Bybit API Error: {data['retMsg']}", flush=True)
+            except Exception as e:
+                print(f"Bot1 Bybit Pump Error: {e}", flush=True)
+            # ===== END BYBIT PUMP SCAN =====
+
+            # ===== BYBIT SCAN FOR COINDX MATCHING =====
             bybit_symbols_found = set()
             try:
                 url = "https://api.bybit.com/v5/market/tickers"
@@ -422,7 +445,7 @@ def bot1_scan_bybit_futures():
                         if change_24h >= PUMP_PERCENT_24H:
                             process_pump_alert(symbol, change_24h, ticker['lastPrice'], 'Bybit Futures', alerted_symbols)
                             pumped += 1
-                    print(f"Bot1 [Bybit]: {cdcx_count} pairs checked | Pumped: {pumped}", flush=True)
+                    print(f"Bot1 [Bybit Match]: {cdcx_count} pairs checked | Pumped: {pumped}", flush=True)
                 else:
                     print(f"Bot1 Bybit API Error: {data['retMsg']}", flush=True)
             except Exception as e:
