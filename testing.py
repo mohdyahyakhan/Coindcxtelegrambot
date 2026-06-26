@@ -130,12 +130,12 @@ def gist_save(filename, data):
     except Exception as e:
         print(f"Gist SAVE error {filename}: {e}", flush=True)
 
-# ===== WATCHLIST - FIXED FOR ARRAY FORMAT =====
+# ===== WATCHLIST - FINAL FIX =====
 def load_watchlist():
     global WATCHLIST
     data = gist_get('watchlist.json')
     if data and isinstance(data, list):
-        # Gist mein array hai ["SLXUSDT", "HEIUSDT"] usko dict mein convert karo
+        # Gist se array aata hai, par memory mein dict hi rakhna hai
         WATCHLIST = {}
         for symbol in data:
             WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
@@ -148,7 +148,7 @@ def save_watchlist():
         print("Watchlist empty, skipping Gist save to prevent overwrite", flush=True)
         return
     try:
-        # Dict se sirf symbols ki list banao Gist ke liye
+        # Memory mein dict hai, par Gist mein array save karna hai
         symbol_list = list(WATCHLIST.keys())
         gist_save('watchlist.json', symbol_list)
         print(f"Saved {len(symbol_list)} coins to Gist", flush=True)
@@ -445,6 +445,15 @@ def bot1_scan_bybit_futures():
 def bot2_supertrend_short():
     print("Bot2 started", flush=True)
     while True:
+        # ===== SAFETY CHECK: LIST TO DICT CONVERSION =====
+        global WATCHLIST
+        if isinstance(WATCHLIST, list):
+            temp_list = WATCHLIST.copy()
+            WATCHLIST = {}
+            for symbol in temp_list:
+                WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
+        # ===== END SAFETY CHECK =====
+
         try:
             if not WATCHLIST:
                 print("Bot2: Watchlist empty, 30s wait...", flush=True)
