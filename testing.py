@@ -244,20 +244,27 @@ def get_klines_bybit(symbol, interval='5', limit=351):
         res = requests.get(url, params=params, timeout=15).json()
         if res['retCode'] == 0 and res['result']['list']:
             data = res['result']['list']
+            if len(data) == 0: # Empty list check
+                print(f"Bot2 Debug: Bybit {symbol} empty kline list", flush=True)
+                return None
             df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
             df = df.astype({'timestamp': 'int64', 'open': float, 'high': float, 'low': float, 'close': float})
             df = df.iloc[::-1].reset_index(drop=True)
             df = df.iloc[:-1].reset_index(drop=True)
             if len(df) < EMA_PERIOD + 50:
+                print(f"Bot2 Debug: Bybit {symbol} only {len(df)} rows", flush=True)
                 return None
             return df
+        else:
+            print(f"Bot2 Debug: Bybit {symbol} retCode={res.get('retCode')} retMsg={res.get('retMsg')}", flush=True)
     except Exception as e:
         print(f"Bybit Kline Error {symbol}: {e}", flush=True)
     return None
 
 def get_klines_coindcx(symbol, interval='5m', limit=351):
     base = symbol.replace('USDT', '')
-    pair = f"F-{base}_USDT"
+    # CoinDCX candles mein F- prefix nahi chahiye ab
+    pair = f"{base}USDT" # Pehle F-{base}_USDT tha
     url = "https://api.coindcx.com/exchange/v1/candles"
     params = {'pair': pair, 'interval': interval, 'limit': limit}
     try:
