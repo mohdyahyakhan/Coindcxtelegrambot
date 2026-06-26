@@ -62,20 +62,27 @@ def gist_save(filename, data):
     except Exception as e:
         print(f"Gist SAVE error {filename}: {e}", flush=True)
 
-# ===== COINDX FUTURES AUTO FETCH - FIXED VERSION =====
+# ===== COINDX FUTURES AUTO FETCH - FINAL WITH HEADERS =====
 def get_coindcx_futures_symbols():
     """CoinDCX /exchange/ticker se live futures pairs nikalta hai"""
     try:
         url = "https://api.coindcx.com/exchange/ticker"
-        res = requests.get(url, timeout=20).json()
+        headers = {'User-Agent': 'Mozilla/5.0'} # Ye add kiya
+        res = requests.get(url, headers=headers, timeout=20)
+
+        # Debug: Check kya mila
+        print(f"Bot1 Debug: CoinDCX status={res.status_code}", flush=True)
+        data = res.json()
+        print(f"Bot1 Debug: CoinDCX returned {len(data)} tickers", flush=True)
+
         futures_symbols = set()
-        for t in res:
+        for t in data:
             market = t.get('market', '')
-            # F- se start hone wale aur _USDT se end hone wale futures hain
             if market.startswith('F-') and market.endswith('_USDT'):
                 base = market.replace('F-', '').replace('_USDT', '')
                 symbol = f"{base}USDT"
                 futures_symbols.add(symbol)
+
         print(f"Bot1: CoinDCX se {len(futures_symbols)} futures pairs mile", flush=True)
         return futures_symbols
     except Exception as e:
