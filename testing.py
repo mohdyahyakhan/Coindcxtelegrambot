@@ -134,13 +134,20 @@ def load_total_pnl():
     else:
         print("Gist PnL empty or failed, keeping memory value", flush=True)
 
+
 def save_total_pnl(value):
     global total_pnl_lifetime
-    if value == total_pnl_lifetime:
-        return
-    total_pnl_lifetime = value
+    # Pehle Gist se latest value le aao
+    current_gist = gist_get('lifetime_pnl.json')
+    if current_gist and 'total_pnl' in current_gist:
+        # Agar Gist ki value zyada hai to use rakho
+        total_pnl_lifetime = max(current_gist['total_pnl'], value)
+    else:
+        total_pnl_lifetime = value
+    
     data = {'total_pnl': total_pnl_lifetime}
     gist_save('lifetime_pnl.json', data)
+
 
 def send_telegram(msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
