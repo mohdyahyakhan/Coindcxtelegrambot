@@ -62,46 +62,26 @@ def gist_save(filename, data):
     except Exception as e:
         print(f"Gist SAVE error {filename}: {e}", flush=True)
 
-# ===== COINDX FUTURES AUTO FETCH - FINAL DEBUG VERSION =====
+# ===== COINDX FUTURES AUTO FETCH - UPDATED VERSION =====
 def get_coindcx_futures_symbols():
     """CoinDCX /exchange/ticker se live futures pairs nikalta hai"""
     try:
         url = "https://api.coindcx.com/exchange/ticker"
         headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(url, headers=headers, timeout=20)
-
-        print(f"Bot1 Debug: CoinDCX status={res.status_code}", flush=True)
         data = res.json()
         print(f"Bot1 Debug: CoinDCX returned {len(data)} tickers", flush=True)
-
-        # Debug: Pehle 5 market names print karo
-        if data:
-            sample_markets = [t.get('market', '') for t in data[:5]]
-            print(f"Bot1 Debug: Sample markets: {sample_markets}", flush=True)
 
         futures_symbols = set()
         for t in data:
             market = t.get('market', '')
-            # Naya filter: Futures mein 'futures' key hoti hai ya volume high hota hai
-            # CoinDCX ab 'F-' prefix nahi deta, bas normal market name deta hai
-            if t.get('futures') == True or 'futures' in t.get('type', '').lower():
+            # Fix: Sab USDT pairs le lo, volume/futures flag ka bharosa mat karo
+            if market.endswith('USDT') and not market.startswith('B-'):
                 base = market.replace('_USDT', '').replace('USDT', '')
                 symbol = f"{base}USDT"
                 futures_symbols.add(symbol)
 
-        # Fallback: Agar futures flag nahi mila to _USDT wale sab le lo
-        if len(futures_symbols) == 0:
-            print("Bot1 Debug: futures flag nahi mila, _USDT filter use kar raha", flush=True)
-            for t in data:
-                market = t.get('market', '')
-                if market.endswith('_USDT') or market.endswith('USDT'):
-                    # Spot exclude karne ke liye volume check
-                    if float(t.get('volume', 0)) > 100000: # 1L+ volume = mostly futures
-                        base = market.replace('_USDT', '').replace('USDT', '')
-                        symbol = f"{base}USDT"
-                        futures_symbols.add(symbol)
-
-        print(f"Bot1: CoinDCX se {len(futures_symbols)} futures pairs mile", flush=True)
+        print(f"Bot1: CoinDCX se {len(futures_symbols)} USDT pairs mile", flush=True)
         return futures_symbols
     except Exception as e:
         print(f"Bot1: CoinDCX futures list error: {e}", flush=True)
