@@ -250,6 +250,8 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
     try:
         res = requests.get(url, params=params, timeout=15)
         print(f"Bot2 Debug: CoinDCX candles {pair} status={res.status_code}", flush=True)
+        if res.status_code!= 200:
+            return None
         data = res.json()
         if not data or not isinstance(data, list):
             print(f"Bot2 Debug: CoinDCX candles {pair} empty data", flush=True)
@@ -272,12 +274,57 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
         print(f"CoinDCX Kline Error {symbol}: {e}", flush=True)
     return None
 
+def get_klines_binance(symbol, interval='5m', limit=351):
+    """Binance Futures se candles laao"""
+    url = "https://fapi.binance.com/fapi/v1/klines"
+    params = {'symbol': symbol, 'interval': interval, 'limit': limit}
+    try:
+        res = requests.get(url, params=params, timeout=15)
+        print(f"Bot2 Debug: Binance candles {symbol} status={res.status_code}", flush=True)
+        if res.status_code!= 200:
+            return None
+        data = res.json()
+        if not data:
+            return None
+        df = pd.DataFrame(data, columns=[
+            'timestamp', 'open', 'high', 'low', 'close', 'volume',
+            'close_time', 'quote_volume', 'trades', 'taker_buy_base',
+            'taker_buy_quote', 'ignore'
+        ])
+        df = df[['timestamp', 'open', 'high', 'low', 'close']]
+        df = df.astype({'timestamp': 'int64', 'open': float, 'high': float,
+                       'low': float, 'close': float})
+        df = df.iloc[:-1].reset_index(drop=True) # Last incomplete candle hatao
+        if len(df) < EMA_PERIOD + 50:
+            print(f"Bot2 Debug: Binance {symbol} only {len(df)} rows", flush=True)
+            return None
+        return df
+    except Exception as e:
+        print(f"Binance Kline Error {symbol}: {e}", flush=True)
+    return None
+
 def get_klines(symbol, interval='5'):
+    """Multiple sources se candles try karo - Bybit > Binance > CoinDCX"""
+    # 1. Bybit try karo
     df = get_klines_bybit(symbol, interval=interval)
     if df is not None:
+        print(f"Bot2: [{symbol}] Data from Bybit", flush=True)
         return df
+
+    # 2. Binance try karo
+    df = get_klines_binance(symbol, interval=f"{interval}m")
+    if df is not None:
+        print(f"Bot2: [{symbol}] Data from Binance", flush=True)
+        return df
+
+    # 3. CoinDCX try karo
     df = get_klines_coindcx(symbol, interval=f"{interval}m")
-    return df
+    if df is not None:
+        print(f"Bot2: [{symbol}] Data from CoinDCX", flush=True)
+        return df
+
+    print(f"Bot2: [{symbol}] Data nahi mila kahi se bhi", flush=True)
+    return None
 
 def check_paper_trades(df, symbol):
     global total_pnl_lifetime
