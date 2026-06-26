@@ -62,17 +62,18 @@ def gist_save(filename, data):
     except Exception as e:
         print(f"Gist SAVE error {filename}: {e}", flush=True)
 
-# ===== COINDX FUTURES AUTO FETCH - NAYA FUNCTION =====
+# ===== COINDX FUTURES AUTO FETCH - FIXED VERSION =====
 def get_coindcx_futures_symbols():
-    """CoinDCX se live futures pairs ki list nikalta hai"""
+    """CoinDCX /exchange/ticker se live futures pairs nikalta hai"""
     try:
-        url = "https://api.coindcx.com/exchange/v1/markets_details"
+        url = "https://api.coindcx.com/exchange/ticker"
         res = requests.get(url, timeout=20).json()
         futures_symbols = set()
-        for market in res:
+        for t in res:
+            market = t.get('market', '')
             # F- se start hone wale aur _USDT se end hone wale futures hain
-            if market.get('futures') and market['pair'].startswith('F-') and market['pair'].endswith('_USDT'):
-                base = market['pair'].replace('F-', '').replace('_USDT', '')
+            if market.startswith('F-') and market.endswith('_USDT'):
+                base = market.replace('F-', '').replace('_USDT', '')
                 symbol = f"{base}USDT"
                 futures_symbols.add(symbol)
         print(f"Bot1: CoinDCX se {len(futures_symbols)} futures pairs mile", flush=True)
@@ -80,7 +81,7 @@ def get_coindcx_futures_symbols():
     except Exception as e:
         print(f"Bot1: CoinDCX futures list error: {e}", flush=True)
         return set()
-
+        
 # ===== WATCHLIST - FINAL FIX =====
 def load_watchlist():
     global WATCHLIST
