@@ -391,35 +391,49 @@ def bot1_scan_bybit_futures():
             except Exception as e:
                 print(f"Bot1 Bybit Error: {e}", flush=True)
 
-            # ===== COINDX SCAN - SIRF JO BYBIT PE NAHI MILE =====
+            
+                        # ===== COINDX SCAN - SIRF JO BYBIT PE NAHI MILE =====
             try:
                 coindcx_only = coindcx_futures - bybit_symbols_found
                 url = "https://api.coindcx.com/exchange/ticker"
-                res = requests.get(url, timeout=20).json()
+                headers = {'User-Agent': 'Mozilla/5.0'} # Ye add kiya
+                res = requests.get(url, headers=headers, timeout=20).json()
+
                 cdcx_map = {}
                 for t in res:
                     market = t.get('market', '')
-                    if market.startswith('F-') and market.endswith('_USDT'):
-                        base = market.replace('F-', '').replace('_USDT', '')
+                    # F- prefix hata diya kyunki CoinDCX ab direct USDT deta hai
+                    if market.endswith('USDT'):
+                        base = market.replace('_USDT', '').replace('USDT', '')
                         symbol = f"{base}USDT"
                         cdcx_map[symbol] = t
+
                 pumped_cdcx = 0
                 for symbol in coindcx_only:
                     if symbol not in cdcx_map:
                         continue
                     ticker = cdcx_map[symbol]
                     try:
-                        change_24h = float(ticker.get('change_24_hour', ticker.get('change_24h', 0)))
+                        # Fix: string ko float mein safely convert karo
+                        change_str = str(ticker.get('change_24_hour', ticker.get('change_24h', '0')))
+                        change_24h = float(change_str)
+
+                        # Debug: Pehle 3 coins ka change print karo
+                        if pumped_cdcx < 3:
+                            print(f"Bot1 Debug: {symbol} change_24h={change_24h}", flush=True)
+
                         price = ticker.get('last_price', '0')
                         if change_24h >= PUMP_PERCENT_24H:
+                            print(f"Bot1 Debug: PUMP FOUND {symbol} {change_24h:.2f}%", flush=True)
                             process_pump_alert(symbol, change_24h, price, 'CoinDCX Futures', alerted_symbols)
                             pumped_cdcx += 1
                     except Exception as e:
+                        print(f"Bot1 Debug: {symbol} parse error: {e}", flush=True)
                         continue
                 print(f"Bot1 [CoinDCX]: {len(coindcx_only)} pairs checked | Pumped: {pumped_cdcx}", flush=True)
             except Exception as e:
                 print(f"Bot1 CoinDCX Error: {e}", flush=True)
-
+                
             print(f"Bot1: Total Watchlist: {len(WATCHLIST)} coins\n", flush=True)
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
