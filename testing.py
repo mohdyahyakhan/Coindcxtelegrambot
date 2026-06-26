@@ -22,91 +22,23 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GIST_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"}
 GIST_URL = f"https://api.github.com/gists/{GIST_ID}"
 
-COINDX_FUTURES = {
-    '0GUSDT', '00000MOGUSDT', '00BONKUSDT', '00CATUSDT', '00FLOKIUSDT',
-    '00LUNCUSDT', '00PEUSDT', '00RATSUSDT', '00SATSUSDT', '00SHIBUSDT',
-    '1INCHUSDT', '1MBABYDOGEUSDT', '2ZUSDT', 'AUSDT', 'AAVEUSDT', 'ACEUSDT',
-    'ACHUSDT', 'ACTUSDT', 'ACUUSDT', 'ACXUSDT', 'ADAUSDT', 'AEROUSDT', 'AEVOUSDT',
-    'AGLDUSDT', 'AIGENSYNUSDT', 'AIXBTUSDT', 'AKTUSDT', 'ALCHUSDT', 'ALGOUSDT',
-    'ALICEUSDT', 'ALLOUSDT', 'ALPINEUSDT', 'ALTUSDT', 'ANIMEUSDT', 'APEUSDT',
-    'API3USDT', 'APTUSDT', 'ARBUSDT', 'ARCUSDT', 'ARKMUSDT',
-    'ARPAUSDT', 'ASRUSDT', 'ASTERUSDT', 'ASTRUSDT', 'ATUSDT', 'ATHUSDT', 'ATOMUSDT',
-    'AUCTIONUSDT', 'AVAUSDT', 'AVAAIUSDT', 'AVAXUSDT', 'AVNTUSDT', 'AWEUSDT',
-    'AXLUSDT', 'AXSUSDT', 'BABYUSDT', 'BANANAUSDT', 'BANANAS31USDT',
-    'BANDUSDT', 'BARDUSDT', 'BASEDUSDT', 'BATUSDT', 'BBUSDT', 'BCHUSDT', 'BELUSDT',
-    'BERAUSDT', 'BICOUSDT', 'BIGTIMEUSDT', 'BILLUSDT', 'BIOUSDT', 'BIRBUSDT',
-    'BLURUSDT', 'BMTUSDT', 'BNBUSDT', 'BNTUSDT', 'BOMEUSDT', 'BRETTUSDT', 'BREVUSDT',
-    'BROCCOLI714USDT', 'BSBUSDT', 'BSVUSDT', 'BTCUSDT', 'BZUSDT', 'C98USDT',
-    'CAKEUSDT', 'CARVUSDT', 'CATIUSDT', 'CCUSDT', 'CELOUSDT', 'CETUSUSDT', 'CFGUSDT',
-    'CFXUSDT', 'CGPTUSDT', 'CHIPUSDT', 'CHILLGUYUSDT', 'CHRSUSDT', 'CHZUSDT', 'CKBUSDT',
-    'CLUSDT', 'CLANKERUSDT', 'COMPUSDT', 'COOKIEUSDT', 'COSUSDT', 'COTIUSDT', 'COWUSDT',
-    'CRVUSDT', 'CTSIUSDT', 'CYBERUSDT', 'DASHUSDT', 'DEEPUSDT', 'DEXEUSDT', 'DIAUSDT',
-    'DOGEUSDT', 'DOGSUSDT', 'DOLOUSDT', 'DOTUSDT', 'DRIFTUSDT', 'DUSKUSDT', 'DYDXUSDT',
-    'DYMUSDT', 'EDENUSDT', 'EDGEUSDT', 'EDUUSDT', 'EGLDUSDT', 'EIGENUSDT', 'ENAUSDT',
-    'ENJUSDT', 'ENSUSDT', 'ENSOUSDT', 'EPICUSDT', 'ERAUSDT', 'ESPUSDT', 'ETCUSDT',
-    'ETHUSDT', 'EVAAUSDT', 'ETHFIUSDT', 'ETHWUSDT', 'EULUSDT', 'FUSDT', 'FARTCOINUSDT', 'FETUSDT',
-    'FFUSDT', 'FHEUSDT', 'FIDAUSDT', 'FIGHTUSDT', 'FILUSDT', 'FLOCKUSDT', 'FLOWUSDT',
-    'FLUIDUSDT', 'FLUXUSDT', 'FOGOUSDT', 'FORMUSDT', 'FRAXUSDT', 'GUSDT', 'GALAUSDT',
-    'GASUSDT', 'GENIUSUSDT', 'GIGGLEUSDT', 'GLMUSDT', 'GMTUSDT', 'GMXUSDT', 'GOATUSDT',
-    'GPSUSDT', 'GRASSUSDT', 'GRIFFAINUSDT', 'GRTUSDT', 'GTCUSDT', 'GUNUSDT', 'GWEIUSDT',
-    'HUSDT', 'HAEDALUSDT', 'HBARUSDT', 'HEIUSDT', 'HEMIUSDT', 'HFTUSDT', 'HIGHUSDT',
-    'HIVEUSDT', 'HMSTRUSDT', 'HOLOUSDT', 'HOMEUSDT', 'HOTUSDT', 'HUMAUSDT', 'HYPEUSDT',
-    'HYPERUSDT', 'ICNTUSDT', 'ICPUSDT', 'ICXUSDT', 'IDUSDT', 'ILVUSDT', 'IMXUSDT',
-    'INITUSDT', 'INJUSDT', 'INXUSDT', 'IOUSDT', 'IOSTUSDT', 'IOTAUSDT', 'IOTXUSDT',
-    'IPUSDT', 'IRYSUSDT', 'JASMYUSDT', 'JOEUSDT', 'JSTUSDT', 'JTOUSDT', 'JUPUSDT',
-    'KAIAUSDT', 'KAITOUSDT', 'KASUSDT', 'KATUSDT', 'KAVAUSDT', 'KERNELUSDT', 'KITEUSDT',
-    'KMNOUSDT', 'KNCUSDT', 'KOMAUSDT', 'KSMUSDT', 'LAUSDT', 'LAYERUSDT', 'LDOUSDT',
-    'LINEAUSDT', 'LINKUSDT', 'LISTAUSDT', 'LITUSDT', 'LPTUSDT', 'LQTYUSDT', 'LSKUSDT',
-    'LUMIAUSDT', 'LUNA2USDT', 'LTCUSDT', 'MAGICUSDT', 'MAGMAUSDT', 'MANAUSDT', 'MANTAUSDT',
-    'MANTRAUSDT', 'MASKUSDT', 'MAVUSDT', 'MAVIAUSDT', 'MBOXUSDT', 'MEUSDT', 'MEGAUSDT',
-    'MELANIAUSDT', 'MEMEUSDT', 'MERLUSDT', 'METISUSDT', 'MEWUSDT', 'MINAUSDT',
-    'MIRAUSDT', 'MITOUSDT', 'MMTUSDT', 'MOCAUSDT', 'MONUSDT', 'MOODENGUSDT', 'MORPHOUSDT',
-    'MOVEUSDT', 'MOVRUSDT', 'MTLUSDT', 'MUBARAKUSDT', 'NATGASUSDT', 'NEARUSDT', 'NEOUSDT',
-    'NEWTUSDT', 'NFPUSDT', 'NIGHTUSDT', 'NILUSDT', 'NMRUSDT', 'NOMUSDT', 'NOTUSDT',
-    'NXPCUSDT', 'OGNUSDT', 'ONDOUSDT', 'ONEUSDT', 'ONGUSDT', 'ONTUSDT',
-    'OPUSDT', 'OPENUSDT', 'OPNUSDT', 'ORCAUSDT', 'ORDIUSDT', 'PARTIUSDT', 'PAXGUSDT',
-    'PENDLEUSDT', 'PENGUUSDT', 'PEOPLEUSDT', 'PHAUSDT', 'PIPPINUSDT', 'PIXELUSDT',
-    'PLUMEUSDT', 'PNUTUSDT', 'POLYXUSDT', 'POPCATUSDT', 'PORTALUSDT',
-    'POWERUSDT', 'POWRUSDT', 'PRLUSDT', 'PROMUSDT', 'PROVEUSDT', 'PUMPUSDT', 'PUNDIXUSDT',
-    'PYTHUSDT', 'QNTUSDT', 'QTUMUSDT', 'RAREUSDT', 'RAVEUSDT', 'RECALLUSDT', 'REDUSDT',
-    'RENDERUSDT', 'RESOLVUSDT', 'REZUSDT', 'RIFUSDT', 'RIVERUSDT', 'RLCUSDT', 'ROBOUSDT',
-    'RONINUSDT', 'ROSEUSDT', 'RPLUSDT', 'RSRUSDT', 'RUNEUSDT', 'RVNUSDT', 'SUSDT',
-    'SAFEUSDT', 'SAGAUSDT', 'SAHARAUSDT', 'SANDUSDT', 'SANTOSUSDT', 'SAPIENUSDT',
-    'SCRUSDT', 'SCRTUSDT', 'SEIUSDT', 'SENTUSDT', 'SFPUSDT', 'SHELLUSDT', 'SIGNUSDT',
-    'SKLUSDT', 'SKRUSDT', 'SKYUSDT', 'SLXUSDT', 'SNXUSDT', 'SOLVUSDT', 'SOMIUSDT',
-    'SONICUSDT', 'SOPHUSDT', 'SPELLUSDT', 'SPKUSDT', 'SPXUSDT', 'SQDUSDT', 'SSVUSDT',
-    'STABLEUSDT', 'STEEMUSDT', 'STGUSDT', 'STOUSDT', 'STORJUSDT', 'STRKUSDT', 'STXUSDT',
-    'SUIUSDT', 'SUNUSDT', 'SUPERUSDT', 'SUSHIUSDT', 'SWARMSUSDT', 'SYNUSDT', 'SYRUPUSDT',
-    'SXTUSDT', 'TUSDT', 'TAUSDT', 'TACUSDT', 'TAIKOUSDT', 'TAOUSDT', 'THEUSDT',
-    'THETAUSDT', 'TIAUSDT', 'TLMUSDT', 'TNSRUSDT', 'TONUSDT', 'TOWNSUSDT', 'TRBUSDT',
-    'TREEUSDT', 'TRIAUSDT', 'TRUMPUSDT', 'TRXUSDT', 'TURTLEUSDT', 'TUTUSDT', 'TWTUSDT',
-    'UBUSDT', 'UMAUSDT', 'UNIUSDT', 'USTCUSDT', 'USUALUSDT', 'USDCUSDT', 'VANAUSDT', 'VANRYUSDT',
-    'VELODROMEUSDT', 'VETUSDT', 'VICUSDT', 'VIRTUALUSDT', 'VTHOUSDT', 'VVVUSDT', 'WUSDT',
-    'WALUSDT', 'WAXPUSDT', 'WCTUSDT', 'WETUSDT', 'WIFUSDT', 'WLDUSDT', 'WLFIUSDT',
-    'WOOUSDT', 'XAIUSDT', 'XANUSDT', 'XAGUSDT', 'XAUUSDT', 'XLMUSDT', 'XMRUSDT',
-    'XPLUSDT', 'XRPUSDT', 'XTZUSDT', 'XVSUSDT', 'YBUSDT', 'YFIUSDT', 'YGGUSDT',
-    'ZBTUSDT', 'ZECUSDT', 'ZENUSDT', 'ZEREBROUSDT', 'ZETAUSDT', 'ZILUSDT', 'ZKUSDT',
-    'ZKCUSDT', 'ZKPUSDT', 'ZROUSDT', 'ZRXUSDT'
-}
-
 WATCHLIST = {}
 PAPER_TRADES = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 total_pnl_lifetime = 0.0
 
-# ===== NTFY FUNCTION - UPDATED =====
+# ===== NTFY FUNCTION =====
 def send_ntfy_plain(msg):
     topic = os.environ.get("NTFY_TOPIC")
     if not topic: return
-    # HTML tags hata do ntfy ke liye
     clean_msg = msg.replace('<b>', '').replace('</b>', '').replace('&lt;', '<').replace('&gt;', '>')
     try:
         requests.post(f"https://ntfy.sh/{topic}", data=clean_msg.encode('utf-8'))
     except Exception as e:
         print(f"ntfy Error: {e}", flush=True)
 
-# ===== GIST HELPER FUNCTIONS - UPDATED =====
+# ===== GIST HELPER FUNCTIONS =====
 def gist_get(filename):
     try:
         res = requests.get(GIST_URL, headers=GIST_HEADERS, timeout=10).json()
@@ -130,12 +62,30 @@ def gist_save(filename, data):
     except Exception as e:
         print(f"Gist SAVE error {filename}: {e}", flush=True)
 
+# ===== COINDX FUTURES AUTO FETCH - NAYA FUNCTION =====
+def get_coindcx_futures_symbols():
+    """CoinDCX se live futures pairs ki list nikalta hai"""
+    try:
+        url = "https://api.coindcx.com/exchange/v1/markets_details"
+        res = requests.get(url, timeout=20).json()
+        futures_symbols = set()
+        for market in res:
+            # F- se start hone wale aur _USDT se end hone wale futures hain
+            if market.get('futures') and market['pair'].startswith('F-') and market['pair'].endswith('_USDT'):
+                base = market['pair'].replace('F-', '').replace('_USDT', '')
+                symbol = f"{base}USDT"
+                futures_symbols.add(symbol)
+        print(f"Bot1: CoinDCX se {len(futures_symbols)} futures pairs mile", flush=True)
+        return futures_symbols
+    except Exception as e:
+        print(f"Bot1: CoinDCX futures list error: {e}", flush=True)
+        return set()
+
 # ===== WATCHLIST - FINAL FIX =====
 def load_watchlist():
     global WATCHLIST
     data = gist_get('watchlist.json')
     if data and isinstance(data, list):
-        # Gist se array aata hai, par memory mein dict hi rakhna hai
         WATCHLIST = {}
         for symbol in data:
             WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
@@ -148,14 +98,13 @@ def save_watchlist():
         print("Watchlist empty, skipping Gist save to prevent overwrite", flush=True)
         return
     try:
-        # Memory mein dict hai, par Gist mein array save karna hai
         symbol_list = list(WATCHLIST.keys())
         gist_save('watchlist.json', symbol_list)
         print(f"Saved {len(symbol_list)} coins to Gist", flush=True)
     except Exception as e:
         print(f"Save watchlist error: {e}", flush=True)
 
-# ===== PAPER TRADES - UPDATED =====
+# ===== PAPER TRADES =====
 def load_paper_trades():
     global PAPER_TRADES
     data = gist_get('paper_trades.json')
@@ -169,7 +118,7 @@ def save_paper_trades():
     data = {'trades': PAPER_TRADES}
     gist_save('paper_trades.json', data)
 
-# ===== LIFETIME PNL - UPDATED =====
+# ===== LIFETIME PNL =====
 def load_total_pnl():
     global total_pnl_lifetime
     data = gist_get('lifetime_pnl.json')
@@ -377,10 +326,18 @@ def check_paper_trades(df, symbol):
 
 def bot1_scan_bybit_futures():
     load_watchlist()
-    print("Bot1 started — Dual Source (Bybit + CoinDCX)", flush=True)
+    print("Bot1 started — Dual Source (Bybit + CoinDCX Auto-Detect)", flush=True)
     while True:
         alerted_symbols = set()
         try:
+            # ===== COINDX FUTURES KO LIVE FETCH KARO =====
+            coindcx_futures = get_coindcx_futures_symbols()
+            if not coindcx_futures:
+                print("Bot1: CoinDCX futures list nahi mili, 60s wait...", flush=True)
+                time.sleep(60)
+                continue
+
+            # ===== BYBIT SCAN =====
             bybit_symbols_found = set()
             try:
                 url = "https://api.bybit.com/v5/market/tickers"
@@ -394,7 +351,7 @@ def bot1_scan_bybit_futures():
                     pumped = 0
                     for ticker in tickers:
                         symbol = ticker['symbol']
-                        if symbol not in COINDX_FUTURES:
+                        if symbol not in coindcx_futures: # Auto list se check
                             continue
                         cdcx_count += 1
                         bybit_symbols_found.add(symbol)
@@ -407,11 +364,12 @@ def bot1_scan_bybit_futures():
                     print(f"Bot1 Bybit API Error: {data['retMsg']}", flush=True)
             except Exception as e:
                 print(f"Bot1 Bybit Error: {e}", flush=True)
+
+            # ===== COINDX SCAN - SIRF JO BYBIT PE NAHI MILE =====
             try:
-                coindcx_only = COINDX_FUTURES - bybit_symbols_found
+                coindcx_only = coindcx_futures - bybit_symbols_found
                 url = "https://api.coindcx.com/exchange/ticker"
                 res = requests.get(url, timeout=20).json()
-                print(f"Bot1 Debug: CoinDCX returned {len(res)} tickers. Sample: {[t['market'] for t in res[:5]]}", flush=True)
                 cdcx_map = {}
                 for t in res:
                     market = t.get('market', '')
@@ -422,21 +380,20 @@ def bot1_scan_bybit_futures():
                 pumped_cdcx = 0
                 for symbol in coindcx_only:
                     if symbol not in cdcx_map:
-                        print(f"Bot1 Debug: {symbol} not found in CoinDCX response", flush=True)
                         continue
                     ticker = cdcx_map[symbol]
                     try:
                         change_24h = float(ticker.get('change_24_hour', ticker.get('change_24h', 0)))
                         price = ticker.get('last_price', '0')
                         if change_24h >= PUMP_PERCENT_24H:
-                            print(f"Bot1 Debug: Found pump {symbol} {change_24h:.2f}%", flush=True)
                             process_pump_alert(symbol, change_24h, price, 'CoinDCX Futures', alerted_symbols)
                             pumped_cdcx += 1
                     except Exception as e:
                         continue
-                print(f"Bot1 [CoinDCX]: Scan complete | Pumped: {pumped_cdcx}", flush=True)
+                print(f"Bot1 [CoinDCX]: {len(coindcx_only)} pairs checked | Pumped: {pumped_cdcx}", flush=True)
             except Exception as e:
                 print(f"Bot1 CoinDCX Error: {e}", flush=True)
+
             print(f"Bot1: Total Watchlist: {len(WATCHLIST)} coins\n", flush=True)
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
