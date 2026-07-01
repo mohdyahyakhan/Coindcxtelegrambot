@@ -16,7 +16,7 @@ ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
 
-# GIST CONFIG - Yahi GIST_ID use karna hai
+# GIST CONFIG - Yahi GIST_ID use karna hai.
 GIST_ID = "5ef25a569ac5dcb8b1a7425aab22cced"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GIST_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"}
