@@ -169,7 +169,7 @@ def save_paper_trades():
     data = {'trades': PAPER_TRADES}
     gist_save('paper_trades.json', data)
 
-# ===== LIFETIME PNL =====
+# ===== LIFETIME PNL - BUG FIXED =====
 def load_total_pnl():
     global total_pnl_lifetime
     data = gist_get('lifetime_pnl.json')
@@ -181,13 +181,10 @@ def load_total_pnl():
 
 def save_total_pnl(value):
     global total_pnl_lifetime
-    current_gist = gist_get('lifetime_pnl.json')
-    if current_gist and 'total_pnl' in current_gist:
-        total_pnl_lifetime = max(current_gist['total_pnl'], value)
-    else:
-        total_pnl_lifetime = value
+    total_pnl_lifetime = value # Seedha new value save kar de. max() hata diya
     data = {'total_pnl': total_pnl_lifetime}
     gist_save('lifetime_pnl.json', data)
+    print(f"Lifetime PnL updated to: {total_pnl_lifetime:.2f}%", flush=True)
 
 def send_telegram(msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
@@ -345,7 +342,7 @@ def check_paper_trades(df, symbol):
         pnl = ((trade['entry'] - sl) / trade['entry']) * 100
         duration = int((time.time() - entry_time) / 60)
         trade['status'] = 'CLOSED_SL'; trade['exit'] = sl; trade['pnl'] = round(pnl, 2); trade['exit_time'] = time.time()
-        save_total_pnl(total_pnl_lifetime + pnl)
+        save_total_pnl(total_pnl_lifetime + pnl) # Yaha negative add hoga
         msg = f"❌ <b>TRADE CLOSED - SL HIT</b> ❌\n\n<b>Coin:</b> {cdcx_name}\n<b>Entry:</b> ${trade['entry']:.6f}\n<b>Exit SL:</b> ${sl:.6f}\n<b>PnL:</b> {pnl:.2f}%\n<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%\n<b>Duration:</b> {duration} min"
         send_telegram(msg); send_ntfy_plain(msg)
         print(f"Paper Trade SL: {cdcx_name} {pnl:.2f}% in {duration}min", flush=True)
