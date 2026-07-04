@@ -125,26 +125,33 @@ def get_coindcx_futures_symbols():
         print(f"Bot1: CoinDCX futures list error: {e}", flush=True)
         return set()
 
-# ===== WATCHLIST - FINAL FIX =====
+# ===== WATCHLIST - AUTO CONVERT FIX =====
 def load_watchlist():
     global WATCHLIST
     data = gist_get('watchlist.json')
-    if data and isinstance(data, list):
+
+    if data:
         WATCHLIST = {}
-        for symbol in data:
-            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
-        print(f"Gist watchlist loaded: {len(WATCHLIST)} coins", flush=True)
+        # CASE 1: Agar data list hai = purana format ["BTCUSDT", "ETHUSDT"]
+        if isinstance(data, list):
+            print(f"Bot2: Purana format mila. Auto-convert kar raha hu...", flush=True)
+            for symbol in data:
+                WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
+            save_watchlist() # Turant naye format mein save kar de
+            print(f"Bot2: Convert ho gaya. {len(WATCHLIST)} coins naye format me save kiye", flush=True)
+
+        # CASE 2: Agar data dict hai = naya format {"BTCUSDT": {...}}
+        elif isinstance(data, dict):
+            WATCHLIST = data
+            print(f"Gist watchlist loaded: {len(WATCHLIST)} coins", flush=True)
     else:
-        print("Gist watchlist empty or failed, keeping memory watchlist", flush=True)
+        print("Gist watchlist empty, starting fresh", flush=True)
 
 def save_watchlist():
-    if not WATCHLIST:
-        print("Watchlist empty, skipping Gist save to prevent overwrite", flush=True)
-        return
     try:
-        symbol_list = list(WATCHLIST.keys())
-        gist_save('watchlist.json', symbol_list)
-        print(f"Saved {len(symbol_list)} coins to Gist", flush=True)
+        # Ab seedha pura dict save karega, sirf list nahi
+        gist_save('watchlist.json', WATCHLIST)
+        print(f"Saved {len(WATCHLIST)} coins to Gist", flush=True)
     except Exception as e:
         print(f"Save watchlist error: {e}", flush=True)
 
@@ -414,9 +421,7 @@ def bot2_supertrend_short():
     print("Bot2 started", flush=True)
     while True:
         global WATCHLIST
-        if isinstance(WATCHLIST, list):
-            temp_list = WATCHLIST.copy(); WATCHLIST = {}
-            for symbol in temp_list: WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
+        # Ye wala check ab zaroorat nahi, load_watchlist mein ho gaya
         try:
             if not WATCHLIST: print("Bot2: Watchlist empty, 30s wait...", flush=True); time.sleep(30); continue
             print(f"\nBot2: ===== NEW CYCLE — {len(WATCHLIST)} coins =====", flush=True)
