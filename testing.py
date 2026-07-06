@@ -156,7 +156,6 @@ def load_ticker_history():
 
 def save_ticker_history():
     global last_ticker_save
-    # Sirf watchlist wale coin save karo, memory bachane ke liye
     data_to_save = {k: v for k, v in TICKER_HISTORY.items() if k in WATCHLIST}
     gist_save('ticker_history.json', data_to_save)
     last_ticker_save = time.time()
@@ -238,7 +237,7 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
     print(f"Bot2: [{symbol}] API fail. Using ticker history fallback", flush=True)
     if symbol not in TICKER_HISTORY or len(TICKER_HISTORY[symbol]) < 50:
         return None
-    
+
     prices = TICKER_HISTORY[symbol][-limit:]
     df = pd.DataFrame()
     df['close'] = prices
@@ -292,11 +291,11 @@ def bot1_scan_coindcx():
                     base = market.replace('_USDT', '').replace('USDT', '')
                     symbol = f"{base}USDT"
                     price = float(t.get('last_price', '0'))
-                    
+
                     if symbol not in TICKER_HISTORY: TICKER_HISTORY[symbol] = []
                     TICKER_HISTORY[symbol].append(price)
                     if len(TICKER_HISTORY[symbol]) > 1000: TICKER_HISTORY[symbol].pop(0)
-                    
+
                     try:
                         change_str = str(t.get('change_24_hour', t.get('change_24h', '0')))
                         change_24h = float(change_str)
@@ -304,11 +303,10 @@ def bot1_scan_coindcx():
                             process_pump_alert(symbol, change_24h, price)
                             pumped += 1
                     except: continue
-            
-            # HAR 5 MIN ME TICKER HISTORY SAVE KARO
+
             if time.time() - last_ticker_save > 300:
                 save_ticker_history()
-                
+
             print(f"Bot1 [CoinDCX]: {len(res)} pairs checked | Pumped: {pumped} | Watchlist: {len(WATCHLIST)}\n", flush=True)
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
         time.sleep(300)
@@ -370,6 +368,7 @@ def show_watchlist(): return jsonify(WATCHLIST)
 @app.route('/papertrades')
 def show_papertrades(): return jsonify(PAPER_TRADES)
 
+# ===== FIXED: TELEGRAM THREAD SAFE =====
 def run_telegram_bot():
     global telegram_app
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
@@ -377,6 +376,10 @@ def run_telegram_bot():
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
     print("Telegram Bot commands started", flush=True)
+
+    import asyncio
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     telegram_app.run_polling()
 
 if __name__ == '__main__':
