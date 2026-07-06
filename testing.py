@@ -26,10 +26,12 @@ GIST_URL = f"https://api.github.com/gists/{GIST_ID}"
 
 WATCHLIST = {}
 PAPER_TRADES = {}
+TICKER_HISTORY = {} # ===== NAYA =====
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 total_pnl_lifetime = 0.0
 telegram_app = None
+last_ticker_save = 0 # ===== NAYA =====
 
 # ===== NTFY FUNCTION =====
 def send_ntfy_plain(msg):
@@ -95,26 +97,6 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = "\n".join([f"• {k}" for k in WATCHLIST.keys()])
     await update.message.reply_text(f"<b>WATCHLIST - {len(WATCHLIST)} coins</b>\n\n{coins}", parse_mode="HTML")
 
-# ===== COINDX FUTURES AUTO FETCH =====
-def get_coindcx_futures_symbols():
-    try:
-        url = "https://api.coindcx.com/exchange/ticker"
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        res = requests.get(url, headers=headers, timeout=20)
-        data = res.json()
-        futures_symbols = set()
-        for t in data:
-            market = t.get('market', '')
-            if market.endswith('USDT') and not market.startswith('B-'):
-                base = market.replace('_USDT', '').replace('USDT', '')
-                symbol = f"{base}USDT"
-                futures_symbols.add(symbol)
-        print(f"Bot1: CoinDCX se {len(futures_symbols)} USDT pairs mile", flush=True)
-        return futures_symbols
-    except Exception as e:
-        print(f"Bot1: CoinDCX futures list error: {e}", flush=True)
-        return set()
-
 # ===== WATCHLIST =====
 def load_watchlist():
     global WATCHLIST
@@ -164,6 +146,22 @@ def save_total_pnl(value):
     gist_save('lifetime_pnl.json', data)
     print(f"Lifetime PnL updated to: {total_pnl_lifetime:.2f}%", flush=True)
 
+# ===== NAYA: TICKER HISTORY LOAD/SAVE =====
+def load_ticker_history():
+    global TICKER_HISTORY
+    data = gist_get('ticker_history.json')
+    if data:
+        TICKER_HISTORY = data
+        print(f"Loaded Ticker History: {len(TICKER_HISTORY)} coins", flush=True)
+
+def save_ticker_history():
+    global last_ticker_save
+    # Sirf watchlist wale coin save karo, memory bachane ke liye
+    data_to_save = {k: v for k, v in TICKER_HISTORY.items() if k in WATCHLIST}
+    gist_save('ticker_history.json', data_to_save)
+    last_ticker_save = time.time()
+    print(f"Saved Ticker History: {len(data_to_save)} coins to Gist", flush=True)
+
 def send_telegram(msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -171,7 +169,6 @@ def send_telegram(msg):
     try: requests.post(url, data=data, timeout=10)
     except Exception as e: print(f"Telegram Error: {e}", flush=True)
 
-# ===== FIXED: PUMP ALERT HATA DIYA =====
 def process_pump_alert(symbol, change_24h, price):
     if symbol in WATCHLIST:
         WATCHLIST[symbol]['time'] = time.time()
@@ -179,7 +176,6 @@ def process_pump_alert(symbol, change_24h, price):
     else:
         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
         save_watchlist()
-        # YAHAN TG + NTFY HATA DIYA. SIRF LOG
         print(f"Bot1 [CoinDCX]: {symbol} +{change_24h:.2f}% added to watchlist, no alert", flush=True)
 
 def calculate_supertrend(df, period=10, multiplier=3):
@@ -215,7 +211,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
     return df
 
-# ===== SIRF COINDCX DATA =====
+# ===== FIXED: TICKER FALLBACK + GIST SAVE =====
 def get_klines_coindcx(symbol, interval='5m', limit=351):
     base = symbol.replace('USDT', '')
     pair = f"{base}USDT"
@@ -223,24 +219,34 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
     params = {'pair': pair, 'interval': interval, 'limit': limit}
     try:
         res = requests.get(url, params=params, timeout=15)
-        if res.status_code!= 200: return None
         data = res.json()
-        if not data or not isinstance(data, list): return None
-        df = pd.DataFrame(data)
-        df = df.rename(columns={'time': 'timestamp'})
-        df['timestamp'] = df['timestamp'].astype('int64')
-        df['open'] = df['open'].astype(float)
-        df['high'] = df['high'].astype(float)
-        df['low'] = df['low'].astype(float)
-        df['close'] = df['close'].astype(float)
-        df = df[['timestamp', 'open', 'high', 'low', 'close']]
-        df = df.sort_values('timestamp').reset_index(drop=True)
-        df = df.iloc[:-1].reset_index(drop=True)
-        if len(df) < EMA_PERIOD + 50: return None
-        print(f"Bot2: [{symbol}] Data from CoinDCX", flush=True)
-        return df
-    except Exception as e: print(f"CoinDCX Kline Error {symbol}: {e}", flush=True)
-    return None
+        if res.status_code == 200 and data and isinstance(data, list) and len(data) > 50:
+            df = pd.DataFrame(data)
+            df = df.rename(columns={'time': 'timestamp'})
+            df['timestamp'] = df['timestamp'].astype('int64')
+            df['open'] = df['open'].astype(float)
+            df['high'] = df['high'].astype(float)
+            df['low'] = df['low'].astype(float)
+            df['close'] = df['close'].astype(float)
+            df = df[['timestamp', 'open', 'high', 'low', 'close']]
+            df = df.sort_values('timestamp').reset_index(drop=True)
+            df = df.iloc[:-1].reset_index(drop=True)
+            print(f"Bot2: [{symbol}] Data from CoinDCX API", flush=True)
+            return df
+    except: pass
+
+    print(f"Bot2: [{symbol}] API fail. Using ticker history fallback", flush=True)
+    if symbol not in TICKER_HISTORY or len(TICKER_HISTORY[symbol]) < 50:
+        return None
+    
+    prices = TICKER_HISTORY[symbol][-limit:]
+    df = pd.DataFrame()
+    df['close'] = prices
+    df['open'] = prices
+    df['high'] = prices
+    df['low'] = prices
+    df['timestamp'] = pd.date_range(end=pd.Timestamp.now(), periods=len(prices), freq='5min').astype('int64') // 10**9
+    return df
 
 def get_klines(symbol, interval='5'):
     return get_klines_coindcx(symbol, interval=f"{interval}m")
@@ -270,10 +276,10 @@ def check_paper_trades(df, symbol):
         send_telegram(msg); send_ntfy_plain(msg); print(f"Paper Trade SL: {cdcx_name} {pnl:.2f}%", flush=True)
     save_paper_trades()
 
-# ===== SIRF COINDCX SCAN =====
 def bot1_scan_coindcx():
     load_watchlist()
-    print("Bot1 started — ONLY CoinDCX Scan", flush=True)
+    load_ticker_history() # ===== NAYA =====
+    print("Bot1 started — ONLY CoinDCX Scan + Ticker Saver", flush=True)
     while True:
         try:
             url = "https://api.coindcx.com/exchange/ticker"
@@ -285,13 +291,24 @@ def bot1_scan_coindcx():
                 if market.endswith('USDT') and not market.startswith('B-'):
                     base = market.replace('_USDT', '').replace('USDT', '')
                     symbol = f"{base}USDT"
+                    price = float(t.get('last_price', '0'))
+                    
+                    if symbol not in TICKER_HISTORY: TICKER_HISTORY[symbol] = []
+                    TICKER_HISTORY[symbol].append(price)
+                    if len(TICKER_HISTORY[symbol]) > 1000: TICKER_HISTORY[symbol].pop(0)
+                    
                     try:
                         change_str = str(t.get('change_24_hour', t.get('change_24h', '0')))
-                        change_24h = float(change_str); price = t.get('last_price', '0')
+                        change_24h = float(change_str)
                         if change_24h >= PUMP_PERCENT_24H:
                             process_pump_alert(symbol, change_24h, price)
                             pumped += 1
                     except: continue
+            
+            # HAR 5 MIN ME TICKER HISTORY SAVE KARO
+            if time.time() - last_ticker_save > 300:
+                save_ticker_history()
+                
             print(f"Bot1 [CoinDCX]: {len(res)} pairs checked | Pumped: {pumped} | Watchlist: {len(WATCHLIST)}\n", flush=True)
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
         time.sleep(300)
@@ -370,6 +387,7 @@ if __name__ == '__main__':
     load_watchlist()
     load_paper_trades()
     load_total_pnl()
+    load_ticker_history() # ===== NAYA =====
     threading.Thread(target=run_telegram_bot, daemon=True).start()
     threading.Thread(target=bot1_scan_coindcx, daemon=True).start()
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
