@@ -70,7 +70,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # BUG FIX
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
     else:
@@ -384,10 +384,10 @@ def run_telegram_bot():
     async def start():
         await telegram_app.initialize()
         await telegram_app.start()
-        await telegram_app.updater.start_polling()
-        await telegram_app.idle() # ===== FIXED =====
+        await telegram_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
 
     loop.run_until_complete(start())
+    loop.run_forever() # ===== YE LINE ZAROORI HAI =====
 
 if __name__ == '__main__':
     print(f"BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
