@@ -26,12 +26,12 @@ GIST_URL = f"https://api.github.com/gists/{GIST_ID}"
 
 WATCHLIST = {}
 PAPER_TRADES = {}
-TICKER_HISTORY = {} # ===== NAYA =====
+TICKER_HISTORY = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 total_pnl_lifetime = 0.0
 telegram_app = None
-last_ticker_save = 0 # ===== NAYA =====
+last_ticker_save = 0
 
 # ===== NTFY FUNCTION =====
 def send_ntfy_plain(msg):
@@ -146,7 +146,7 @@ def save_total_pnl(value):
     gist_save('lifetime_pnl.json', data)
     print(f"Lifetime PnL updated to: {total_pnl_lifetime:.2f}%", flush=True)
 
-# ===== NAYA: TICKER HISTORY LOAD/SAVE =====
+# ===== TICKER HISTORY LOAD/SAVE =====
 def load_ticker_history():
     global TICKER_HISTORY
     data = gist_get('ticker_history.json')
@@ -210,7 +210,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
     return df
 
-# ===== FIXED: TICKER FALLBACK + GIST SAVE =====
+# ===== TICKER FALLBACK + GIST SAVE =====
 def get_klines_coindcx(symbol, interval='5m', limit=351):
     base = symbol.replace('USDT', '')
     pair = f"{base}USDT"
@@ -277,7 +277,7 @@ def check_paper_trades(df, symbol):
 
 def bot1_scan_coindcx():
     load_watchlist()
-    load_ticker_history() # ===== NAYA =====
+    load_ticker_history()
     print("Bot1 started — ONLY CoinDCX Scan + Ticker Saver", flush=True)
     while True:
         try:
@@ -369,7 +369,6 @@ def show_watchlist(): return jsonify(WATCHLIST)
 def show_papertrades(): return jsonify(PAPER_TRADES)
 
 # ===== FIXED: TELEGRAM THREAD SAFE =====
-
 def run_telegram_bot():
     global telegram_app
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
@@ -381,15 +380,14 @@ def run_telegram_bot():
     import asyncio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
+
     async def start():
         await telegram_app.initialize()
         await telegram_app.start()
         await telegram_app.updater.start_polling()
-        await telegram_app.updater.idle()
-    
-    loop.run_until_complete(start())
+        await telegram_app.idle() # ===== FIXED =====
 
+    loop.run_until_complete(start())
 
 if __name__ == '__main__':
     print(f"BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
@@ -399,7 +397,7 @@ if __name__ == '__main__':
     load_watchlist()
     load_paper_trades()
     load_total_pnl()
-    load_ticker_history() # ===== NAYA =====
+    load_ticker_history()
     threading.Thread(target=run_telegram_bot, daemon=True).start()
     threading.Thread(target=bot1_scan_coindcx, daemon=True).start()
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
