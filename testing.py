@@ -369,6 +369,7 @@ def show_watchlist(): return jsonify(WATCHLIST)
 def show_papertrades(): return jsonify(PAPER_TRADES)
 
 # ===== FIXED: TELEGRAM THREAD SAFE =====
+
 def run_telegram_bot():
     global telegram_app
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
@@ -380,7 +381,15 @@ def run_telegram_bot():
     import asyncio
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    telegram_app.run_polling()
+    
+    async def start():
+        await telegram_app.initialize()
+        await telegram_app.start()
+        await telegram_app.updater.start_polling()
+        await telegram_app.updater.idle()
+    
+    loop.run_until_complete(start())
+
 
 if __name__ == '__main__':
     print(f"BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
