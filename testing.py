@@ -171,17 +171,16 @@ def send_telegram(msg):
     try: requests.post(url, data=data, timeout=10)
     except Exception as e: print(f"Telegram Error: {e}", flush=True)
 
+# ===== FIXED: PUMP ALERT HATA DIYA =====
 def process_pump_alert(symbol, change_24h, price):
     if symbol in WATCHLIST:
         WATCHLIST[symbol]['time'] = time.time()
-        print(f"Bot1 [CoinDCX]: {symbol} +{change_24h:.2f}% still pumping", flush=True)
+        print(f"Bot1 [CoinDCX]: {symbol} +{change_24h:.2f}% already in watchlist", flush=True)
     else:
         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
         save_watchlist()
-        cdcx_name = symbol.replace('USDT', '-USDT')
-        msg = f"🔥 <b>NEW PUMP ALERT</b> 🔥\n\n<b>Coin:</b> {cdcx_name}\n<b>24h Pump:</b> +{change_24h:.2f}%\n<b>Price:</b> ${price}"
-        send_telegram(msg); send_ntfy_plain(msg)
-        print(f"Bot1 [CoinDCX]: {symbol} +{change_24h:.2f}% added to watchlist", flush=True)
+        # YAHAN TG + NTFY HATA DIYA. SIRF LOG
+        print(f"Bot1 [CoinDCX]: {symbol} +{change_24h:.2f}% added to watchlist, no alert", flush=True)
 
 def calculate_supertrend(df, period=10, multiplier=3):
     df = df.copy()
@@ -216,7 +215,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
     return df
 
-# ===== CHANGED: SIRF COINDCX DATA =====
+# ===== SIRF COINDCX DATA =====
 def get_klines_coindcx(symbol, interval='5m', limit=351):
     base = symbol.replace('USDT', '')
     pair = f"{base}USDT"
@@ -244,7 +243,6 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
     return None
 
 def get_klines(symbol, interval='5'):
-    # BYBIT + BINANCE HATA DIYA. SIRF COINDCX
     return get_klines_coindcx(symbol, interval=f"{interval}m")
 
 def check_paper_trades(df, symbol):
@@ -272,7 +270,7 @@ def check_paper_trades(df, symbol):
         send_telegram(msg); send_ntfy_plain(msg); print(f"Paper Trade SL: {cdcx_name} {pnl:.2f}%", flush=True)
     save_paper_trades()
 
-# ===== CHANGED: SIRF COINDCX SCAN =====
+# ===== SIRF COINDCX SCAN =====
 def bot1_scan_coindcx():
     load_watchlist()
     print("Bot1 started — ONLY CoinDCX Scan", flush=True)
@@ -332,7 +330,7 @@ def bot2_supertrend_short():
                         tp_price = round(close_price * 0.95, 6); sl_price = round(close_price * 1.02, 6)
                         PAPER_TRADES[symbol] = {'entry': close_price, 'tp': tp_price, 'sl': sl_price, 'status': 'OPEN', 'time': time.time()}
                         save_paper_trades()
-                        msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {cdcx_name}\n<b>Signal:</b> #{cross_count + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>TP 5%:</b> ${tp_price}\n<b>SL 2%:</b> ${sl_price}"
+                        msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {cdcx_name}\n<b>Signal:</b> #{cross_count + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>TP 5%:</b> ${tp_price}\n<b>SL 2%:</b> ${sl_price}\n\n<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%"
                         send_telegram(msg); send_ntfy_plain(msg)
                         WATCHLIST[symbol]['cross_count'] = cross_count + 1
                         print(f"Bot2: [{cdcx_name}] ✅ PAPER SHORT #{cross_count + 1}", flush=True)
@@ -373,6 +371,6 @@ if __name__ == '__main__':
     load_paper_trades()
     load_total_pnl()
     threading.Thread(target=run_telegram_bot, daemon=True).start()
-    threading.Thread(target=bot1_scan_coindcx, daemon=True).start() # NAME CHANGE
+    threading.Thread(target=bot1_scan_coindcx, daemon=True).start()
     threading.Thread(target=bot2_supertrend_short, daemon=True).start()
     app.run(host='0.0.0.0', port=10000)
