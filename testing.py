@@ -76,12 +76,12 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # <-- YE SAHI HAI
+        WATCHLIST = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # <-- BAS YE LINE BADLI
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
     else:
         await update.message.reply_text(f"⚠️ {coin} pehle se WATCHLIST me hai")
-
+        
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coin_text = ""
     if context.args:
