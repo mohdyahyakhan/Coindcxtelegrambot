@@ -104,19 +104,23 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"⚠️ {coin} WATCHLIST me hai hi nahi")
 
 async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global WATCHLIST
     if not WATCHLIST:
         await update.message.reply_text("WATCHLIST khali hai\nCoin add karne ke liye: ADD BTCUSDT")
         return
-    coins = "\n".join([f"• {k}" for k in WATCHLIST.keys()])
-    await update.message.reply_text(f"<b>WATCHLIST - {len(WATCHLIST)} coins</b>\n\n{coins}", parse_mode="HTML")
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.upper()
-    if text.startswith("ADD "):
-        await add_command(update, context)
-    elif text.startswith("REMOVE "):
-        await remove_command(update, context)
-
+    
+    coins_list = []
+    for coin, data in WATCHLIST.items():
+        if isinstance(data, dict):  # taaki time, cross_count jaisa kachra na aaye
+            coins_list.append(f"• {coin}")
+    
+    if not coins_list:
+        await update.message.reply_text("WATCHLIST me data kharab hai. /REMOVE karke dubara ADD karo")
+        return
+        
+    coins = "\n".join(coins_list)
+    await update.message.reply_text(f"<b>WATCHLIST - {len(coins_list)} coins</b>\n\n{coins}", parse_mode="HTML")
+    
 # ===== WATCHLIST =====
 def load_watchlist():
     global WATCHLIST
