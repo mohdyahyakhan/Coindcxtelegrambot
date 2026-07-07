@@ -8,7 +8,8 @@ import pandas as pd
 import numpy as np
 import math
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram import Update, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes
 
 app = Flask(__name__)
 
@@ -350,7 +351,7 @@ def bot2_supertrend_short():
                 df = get_klines(symbol)
                 if df is None or len(df) < EMA_PERIOD + 2:
                     print(f"Bot2: [{cdcx_name}] SKIP — data nahi mila", flush=True)
-                    if info.get('data_fail_count', 0) >= 2: to_remove.append(symbol); print(f"Bot2: [{cdcx_name}] 3x fail — remove", flush=True)
+                    if info.get('data_fail_count', 0) >= 9: to_remove.append(symbol); print(f"Bot2: [{cdcx_name}] 3x fail — remove", flush=True)
                     else: WATCHLIST[symbol]['data_fail_count'] = info.get('data_fail_count', 0) + 1
                     continue
                 else: WATCHLIST[symbol]['data_fail_count'] = 0
