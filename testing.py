@@ -8,7 +8,7 @@ import numpy as np
 import json
 import math
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 app = Flask(__name__)
 
@@ -63,24 +63,37 @@ def gist_save(filename, data):
 
 # ===== TELEGRAM COMMANDS =====
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Use: /add COINNAME\nEx: /add BTCUSDT")
+    coin_text = ""
+    if context.args:
+        coin_text = context.args[0]
+    else:
+        # /add ke bina bhi kaam karega
+        coin_text = update.message.text.replace("ADD ", "").replace("add ", "").strip()
+    
+    if not coin_text:
+        await update.message.reply_text("Use: /add COINNAME\nYa: ADD COINNAME\nEx: ADD BTCUSDT")
         return
-    coin = context.args[0].upper()
+    coin = coin_text.upper()
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # SAHI HAI
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
     else:
         await update.message.reply_text(f"⚠️ {coin} pehle se WATCHLIST me hai")
 
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Use: /remove COINNAME\nEx: /remove BTCUSDT")
+    coin_text = ""
+    if context.args:
+        coin_text = context.args[0]
+    else:
+        coin_text = update.message.text.replace("REMOVE ", "").replace("remove ", "").strip()
+        
+    if not coin_text:
+        await update.message.reply_text("Use: /remove COINNAME\nYa: REMOVE COINNAME\nEx: REMOVE BTCUSDT")
         return
-    coin = context.args[0].upper()
+    coin = coin_text.upper()
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin in WATCHLIST:
@@ -92,10 +105,17 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not WATCHLIST:
-        await update.message.reply_text("WATCHLIST khali hai")
+        await update.message.reply_text("WATCHLIST khali hai\nCoin add karne ke liye: ADD BTCUSDT")
         return
     coins = "\n".join([f"• {k}" for k in WATCHLIST.keys()])
     await update.message.reply_text(f"<b>WATCHLIST - {len(WATCHLIST)} coins</b>\n\n{coins}", parse_mode="HTML")
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.upper()
+    if text.startswith("ADD "):
+        await add_command(update, context)
+    elif text.startswith("REMOVE "):
+        await remove_command(update, context)
 
 # ===== WATCHLIST =====
 def load_watchlist():
@@ -375,6 +395,7 @@ def run_telegram_bot():
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)) # YE NAYA LINE HAI
     print("Telegram Bot commands started", flush=True)
 
     import asyncio
@@ -387,7 +408,7 @@ def run_telegram_bot():
         await telegram_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
 
     loop.run_until_complete(start())
-    loop.run_forever() # ===== YE LINE ZAROORI HAI =====
+    loop.run_forever()
 
 if __name__ == '__main__':
     print(f"BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
