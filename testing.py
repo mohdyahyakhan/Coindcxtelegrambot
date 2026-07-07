@@ -1,11 +1,12 @@
 import requests
 import time
 import os
+import json
+WATCHLIST = {}
 from flask import Flask, jsonify
 import threading
 import pandas as pd
 import numpy as np
-import json
 import math
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -119,17 +120,18 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ===== WATCHLIST =====
 def load_watchlist():
     global WATCHLIST
-    data = gist_get('watchlist.json')
-    if data:
-        if isinstance(data, list):
-            print(f"Bot2: Purana format mila. Auto-convert kar raha hu...", flush=True)
-            WATCHLIST = {symbol: {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} for symbol in data}
-            save_watchlist()
-        elif isinstance(data, dict):
-            WATCHLIST = data
-            print(f"Gist watchlist loaded: {len(WATCHLIST)} coins", flush=True)
-    else:
-        print("Gist watchlist empty, starting fresh", flush=True)
+    try:
+        with open('watchlist.json', 'r') as f:
+            data = json.load(f)
+            # agar purana kharab data hai to reset
+            if isinstance(data, dict) and data and all(isinstance(v, float) for v in data.values()):
+                print("Purana kharab watchlist mila. Reset kar raha hu.")
+                WATCHLIST = {}
+                save_watchlist()
+            else:
+                WATCHLIST = data
+    except:
+        WATCHLIST = {}
 
 def save_watchlist():
     try:
