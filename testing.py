@@ -394,6 +394,11 @@ def show_watchlist(): return jsonify(WATCHLIST)
 def show_papertrades(): return jsonify(PAPER_TRADES)
 
 # ===== FIXED: TELEGRAM THREAD SAFE =====
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip().upper()
+    await update.message.reply_text("Bhai command se baat kar 😅\n\n/ADD BTCUSDT\n/WATCHLIST\n/HELP")
+    
 def run_telegram_bot():
     global telegram_app
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
