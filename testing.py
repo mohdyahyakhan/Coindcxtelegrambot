@@ -68,7 +68,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         coin_text = context.args[0]
     else:
         coin_text = update.message.text.replace("ADD ", "").replace("add ", "").strip()
-    
+
     if not coin_text:
         await update.message.reply_text("Use: /add COINNAME\nYa: ADD COINNAME\nEx: ADD BTCUSDT")
         return
@@ -76,19 +76,19 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # <-- BAS YE LINE BADLI
+        WATCHLIST = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # <-- SAHI LINE
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
     else:
         await update.message.reply_text(f"⚠️ {coin} pehle se WATCHLIST me hai")
-        
+
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coin_text = ""
     if context.args:
         coin_text = context.args[0]
     else:
         coin_text = update.message.text.replace("REMOVE ", "").replace("remove ", "").strip()
-        
+
     if not coin_text:
         await update.message.reply_text("Use: /remove COINNAME\nYa: REMOVE COINNAME\nEx: REMOVE BTCUSDT")
         return
