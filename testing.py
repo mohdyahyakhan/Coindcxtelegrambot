@@ -8,8 +8,7 @@ import pandas as pd
 import numpy as np
 import math
 from telegram import Update
-from telegram import Update, filters
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 app = Flask(__name__)
 
