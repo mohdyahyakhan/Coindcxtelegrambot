@@ -2,7 +2,6 @@ import requests
 import time
 import os
 import json
-WATCHLIST = {}
 from flask import Flask, jsonify
 import threading
 import pandas as pd
@@ -77,7 +76,8 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # <-- SAHI LINE
+        # YE WALI LINE THEEK KI HAI - POORI DICT RESET NAHI KARENGE
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
     else:
@@ -223,7 +223,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else: df.loc[df.index[i], 'final_lowerband'] = df['final_lowerband'].iloc[i - 1]
         prev_st = df['supertrend'].iloc[i - 1]; close_i = df['close'].iloc[i]
         if prev_st and close_i < df['final_lowerband'].iloc[i]: df.loc[df.index[i], 'supertrend'] = False
-        elif not prev_st and close_i > df['final_upperband'].iloc[i]: df.loc[df.index[i], 'supertrend'] = True
+        elif not prev_st and close_i > df['upperband'].iloc[i]: df.loc[df.index[i], 'supertrend'] = True
         else: df.loc[df.index[i], 'supertrend'] = prev_st
         if df['supertrend'].iloc[i]: df.loc[df.index[i], 'st_line'] = df['final_lowerband'].iloc[i]
         else: df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
@@ -396,7 +396,7 @@ def run_telegram_bot():
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)) # YE NAYA LINE HAI
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     print("Telegram Bot commands started", flush=True)
 
     import asyncio
