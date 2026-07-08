@@ -2,8 +2,8 @@ import requests
 import time
 import os
 import json
-from flask import Flask, jsonify
-import threading
+import asyncio
+from flask import Flask, jsonify, request
 import pandas as pd
 import numpy as np
 import math
@@ -76,7 +76,6 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        # YE WALI LINE THEEK KI HAI - POORI DICT RESET NAHI KARENGE
         WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
@@ -108,34 +107,25 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not WATCHLIST:
         await update.message.reply_text("WATCHLIST khali hai\nCoin add karne ke liye: ADD BTCUSDT")
         return
-    
+
     coins_list = []
     for coin, data in WATCHLIST.items():
-        if isinstance(data, dict):  # taaki time, cross_count jaisa kachra na aaye
+        if isinstance(data, dict):
             coins_list.append(f"• {coin}")
-    
+
     if not coins_list:
         await update.message.reply_text("WATCHLIST me data kharab hai. /REMOVE karke dubara ADD karo")
         return
-        
+
     coins = "\n".join(coins_list)
     await update.message.reply_text(f"<b>WATCHLIST - {len(coins_list)} coins</b>\n\n{coins}", parse_mode="HTML")
-    
+
 # ===== WATCHLIST =====
 def load_watchlist():
     global WATCHLIST
-    try:
-        with open('watchlist.json', 'r') as f:
-            data = json.load(f)
-            # agar purana kharab data hai to reset
-            if isinstance(data, dict) and data and all(isinstance(v, float) for v in data.values()):
-                print("Purana kharab watchlist mila. Reset kar raha hu.")
-                WATCHLIST = {}
-                save_watchlist()
-            else:
-                WATCHLIST = data
-    except:
-        WATCHLIST = {}
+    data = gist_get('watchlist.json')
+    if data: WATCHLIST = data
+    else: WATCHLIST = {}
 
 def save_watchlist():
     try:
@@ -300,7 +290,9 @@ def check_paper_trades(df, symbol):
         send_telegram(msg); send_ntfy_plain(msg); print(f"Paper Trade SL: {cdcx_name} {pnl:.2f}%", flush=True)
     save_paper_trades()
 
-def bot1_scan_coindcx():
+# ===== STEP 2: ASYNC BANAYA =====
+async def bot1_scan_coindcx_async():
+    global last_ticker_save
     load_watchlist()
     load_ticker_history()
     print("Bot1 started — ONLY CoinDCX Scan + Ticker Saver", flush=True)
@@ -312,6 +304,7 @@ def bot1_scan_coindcx():
             pumped = 0
             for t in res:
                 market = t.get('market', '')
+                # STEP 3.1: B- FILTER HATA DIYA
                 if market.endswith('USDT'):
                     base = market.replace('_USDT', '').replace('USDT', '')
                     symbol = f"{base}USDT"
@@ -322,6 +315,7 @@ def bot1_scan_coindcx():
                     if len(TICKER_HISTORY[symbol]) > 1000: TICKER_HISTORY[symbol].pop(0)
 
                     try:
+                        # STEP 3.2: price_change_24h ADD KIYA
                         change_str = str(t.get('change_24_hour', t.get('change_24h', t.get('price_change_24h', '0'))))
                         change_24h = float(change_str)
                         if change_24h >= PUMP_PERCENT_24H:
@@ -334,14 +328,14 @@ def bot1_scan_coindcx():
 
             print(f"Bot1 [CoinDCX]: {len(res)} pairs checked | Pumped: {pumped} | Watchlist: {len(WATCHLIST)}\n", flush=True)
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
-        time.sleep(300)
+        await asyncio.sleep(300) # time.sleep ko await se badla
 
-def bot2_supertrend_short():
+async def bot2_supertrend_short_async():
     print("Bot2 started — ONLY CoinDCX Data", flush=True)
     while True:
         global WATCHLIST
         try:
-            if not WATCHLIST: print("Bot2: Watchlist empty, 30s wait...", flush=True); time.sleep(30); continue
+            if not WATCHLIST: print("Bot2: Watchlist empty, 30s wait...", flush=True); await asyncio.sleep(30); continue
             print(f"\nBot2: ===== NEW CYCLE — {len(WATCHLIST)} coins =====", flush=True)
             to_remove = []
             for symbol, info in list(WATCHLIST.items()):
@@ -376,11 +370,11 @@ def bot2_supertrend_short():
                         print(f"Bot2: [{cdcx_name}] ✅ PAPER SHORT #{cross_count + 1}", flush=True)
                 if current_short: WATCHLIST[symbol]['last_state'] = 'short'
                 elif reset_state: WATCHLIST[symbol]['last_state'] = 'reset'
-                save_watchlist(); time.sleep(1)
+                save_watchlist(); await asyncio.sleep(1) # time.sleep ko await se badla
             for symbol in to_remove: WATCHLIST.pop(symbol, None); save_watchlist()
             print(f"Bot2: ===== CYCLE COMPLETE — 30s wait =====\n", flush=True)
         except Exception as e: import traceback; print(f"Bot2 Error: {e}", flush=True)
-        time.sleep(30)
+        await asyncio.sleep(30) # time.sleep ko await se badla
 
 @app.route('/')
 def home():
@@ -393,43 +387,51 @@ def show_watchlist(): return jsonify(WATCHLIST)
 @app.route('/papertrades')
 def show_papertrades(): return jsonify(PAPER_TRADES)
 
-# ===== FIXED: TELEGRAM THREAD SAFE =====
+# ===== STEP 1: WEBHOOK LAGAYA + THREADING HATAYA =====
+@app.route('/' + TELEGRAM_BOT_TOKEN, methods=['POST'])
+def webhook():
+    """Telegram webhook handler"""
+    if telegram_app:
+        json_str = request.get_data().decode('UTF-8')
+        update = Update.de_json(json_str, telegram_app.bot)
+        asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), asyncio.get_event_loop())
+    return 'ok'
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().upper()
     await update.message.reply_text("Bhai command se baat kar 😅\n\n/ADD BTCUSDT\n/WATCHLIST\n/HELP")
-    
-def run_telegram_bot():
+
+async def run_bot_tasks():
+    """Dono bot kaam yahi se chalayenge"""
+    asyncio.create_task(bot1_scan_coindcx_async())
+    asyncio.create_task(bot2_supertrend_short_async())
+
+def main():
     global telegram_app
+    print(f"BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
+    print(f"CHAT_ID set: {bool(TELEGRAM_CHAT_ID)}", flush=True)
+    print(f"GITHUB_TOKEN set: {bool(GITHUB_TOKEN)}", flush=True)
+
+    load_watchlist()
+    load_paper_trades()
+    load_total_pnl()
+    load_ticker_history()
+
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    print("Telegram Bot commands started", flush=True)
 
-    import asyncio
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    WEBHOOK_URL = "https://coindcxtelegrambot.onrender.com/" + TELEGRAM_BOT_TOKEN
 
-    async def start():
-        await telegram_app.initialize()
-        await telegram_app.start()
-        await telegram_app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
+    loop.run_until_complete(telegram_app.bot.set_webhook(url=WEBHOOK_URL))
+    print(f"Webhook set to: {WEBHOOK_URL}", flush=True)
 
-    loop.run_until_complete(start())
-    loop.run_forever()
+    loop.create_task(run_bot_tasks())
+    app.run(host='0.0.0.0', port=10000)
 
 if __name__ == '__main__':
-    print(f"BOT_TOKEN set: {bool(TELEGRAM_BOT_TOKEN)}", flush=True)
-    print(f"CHAT_ID set: {bool(TELEGRAM_CHAT_ID)}", flush=True)
-    print(f"GITHUB_TOKEN set: {bool(GITHUB_TOKEN)}", flush=True)
-    time.sleep(5)
-    load_watchlist()
-    load_paper_trades()
-    load_total_pnl()
-    load_ticker_history()
-    threading.Thread(target=run_telegram_bot, daemon=True).start()
-    threading.Thread(target=bot1_scan_coindcx, daemon=True).start()
-    threading.Thread(target=bot2_supertrend_short, daemon=True).start()
-    app.run(host='0.0.0.0', port=10000)
+    main()
