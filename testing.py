@@ -1,3 +1,4 @@
+import threading
 import requests
 import time
 import os
@@ -418,7 +419,9 @@ def main():
 
     WEBHOOK_URL = "https://coindcxtelegrambot.onrender.com/" + TELEGRAM_BOT_TOKEN
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    
     loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
     loop.run_until_complete(telegram_app.bot.set_webhook(url=WEBHOOK_URL))
     print(f"Webhook set to: {WEBHOOK_URL}", flush=True)
@@ -427,7 +430,13 @@ def main():
     loop.create_task(bot1_scan_coindcx_async())
     loop.create_task(bot2_supertrend_short_async())
 
-    app.run(host='0.0.0.0', port=10000)
+    # FLASK KO ALAG THREAD ME CHALAO
+    flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000, use_reloader=False))
+    flask_thread.daemon = True
+    flask_thread.start()
+
+    print("Flask started in thread. Running bots...", flush=True)
+    loop.run_forever()
 
 if __name__ == '__main__':
     main()
