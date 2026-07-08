@@ -322,7 +322,7 @@ def bot1_scan_coindcx():
                     if len(TICKER_HISTORY[symbol]) > 1000: TICKER_HISTORY[symbol].pop(0)
 
                     try:
-                        change_str = str(t.get('change_24_hour', t.get('change_24h', '0')))
+                        change_str = str(t.get('change_24_hour', t.get('change_24h', t.get('price_change_24h', '0'))))
                         change_24h = float(change_str)
                         if change_24h >= PUMP_PERCENT_24H:
                             process_pump_alert(symbol, change_24h, price)
