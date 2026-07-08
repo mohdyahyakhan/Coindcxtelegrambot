@@ -422,14 +422,12 @@ def main():
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
     telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    WEBHOOK_URL = "https://coindcxtelegrambot.onrender.com/" + TELEGRAM_BOT_TOKEN
-
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     
+    # WEBHOOK HATA DIYA - POLLING CHALAYENGE
     loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
-    loop.run_until_complete(telegram_app.bot.set_webhook(url=WEBHOOK_URL))
-    print(f"Webhook set to: {WEBHOOK_URL}", flush=True)
+    print("Webhook deleted. Starting Polling...", flush=True)
 
     # YE 2 LINE BOT START KARENGE
     loop.create_task(bot1_scan_coindcx_async())
@@ -440,7 +438,9 @@ def main():
     flask_thread.daemon = True
     flask_thread.start()
 
-    print("Flask started in thread. Running bots...", flush=True)
+    # POLLING START
+    print("Flask started in thread. Running bots with Polling...", flush=True)
+    loop.create_task(telegram_app.run_polling(drop_pending_updates=True))
     loop.run_forever()
 
 if __name__ == '__main__':
