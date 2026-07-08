@@ -290,7 +290,7 @@ def check_paper_trades(df, symbol):
         send_telegram(msg); send_ntfy_plain(msg); print(f"Paper Trade SL: {cdcx_name} {pnl:.2f}%", flush=True)
     save_paper_trades()
 
-# ===== STEP 2: ASYNC BANAYA =====
+# ===== ASYNC BOTS =====
 async def bot1_scan_coindcx_async():
     global last_ticker_save
     load_watchlist()
@@ -304,8 +304,7 @@ async def bot1_scan_coindcx_async():
             pumped = 0
             for t in res:
                 market = t.get('market', '')
-                # STEP 3.1: B- FILTER HATA DIYA
-                if market.endswith('USDT'):
+                if market.endswith('USDT'): # B- FILTER HATA DIYA
                     base = market.replace('_USDT', '').replace('USDT', '')
                     symbol = f"{base}USDT"
                     price = float(t.get('last_price', '0'))
@@ -315,8 +314,7 @@ async def bot1_scan_coindcx_async():
                     if len(TICKER_HISTORY[symbol]) > 1000: TICKER_HISTORY[symbol].pop(0)
 
                     try:
-                        # STEP 3.2: price_change_24h ADD KIYA
-                        change_str = str(t.get('change_24_hour', t.get('change_24h', t.get('price_change_24h', '0'))))
+                        change_str = str(t.get('change_24_hour', t.get('change_24h', t.get('price_change_24h', '0')))) # price_change_24h add
                         change_24h = float(change_str)
                         if change_24h >= PUMP_PERCENT_24H:
                             process_pump_alert(symbol, change_24h, price)
@@ -328,7 +326,7 @@ async def bot1_scan_coindcx_async():
 
             print(f"Bot1 [CoinDCX]: {len(res)} pairs checked | Pumped: {pumped} | Watchlist: {len(WATCHLIST)}\n", flush=True)
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
-        await asyncio.sleep(300) # time.sleep ko await se badla
+        await asyncio.sleep(300)
 
 async def bot2_supertrend_short_async():
     print("Bot2 started — ONLY CoinDCX Data", flush=True)
@@ -370,11 +368,11 @@ async def bot2_supertrend_short_async():
                         print(f"Bot2: [{cdcx_name}] ✅ PAPER SHORT #{cross_count + 1}", flush=True)
                 if current_short: WATCHLIST[symbol]['last_state'] = 'short'
                 elif reset_state: WATCHLIST[symbol]['last_state'] = 'reset'
-                save_watchlist(); await asyncio.sleep(1) # time.sleep ko await se badla
+                save_watchlist(); await asyncio.sleep(1)
             for symbol in to_remove: WATCHLIST.pop(symbol, None); save_watchlist()
             print(f"Bot2: ===== CYCLE COMPLETE — 30s wait =====\n", flush=True)
         except Exception as e: import traceback; print(f"Bot2 Error: {e}", flush=True)
-        await asyncio.sleep(30) # time.sleep ko await se badla
+        await asyncio.sleep(30)
 
 @app.route('/')
 def home():
@@ -387,7 +385,7 @@ def show_watchlist(): return jsonify(WATCHLIST)
 @app.route('/papertrades')
 def show_papertrades(): return jsonify(PAPER_TRADES)
 
-# ===== STEP 1: WEBHOOK LAGAYA + THREADING HATAYA =====
+# ===== WEBHOOK =====
 @app.route('/' + TELEGRAM_BOT_TOKEN, methods=['POST'])
 def webhook():
     """Telegram webhook handler"""
@@ -400,11 +398,6 @@ def webhook():
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().upper()
     await update.message.reply_text("Bhai command se baat kar 😅\n\n/ADD BTCUSDT\n/WATCHLIST\n/HELP")
-
-async def run_bot_tasks():
-    """Dono bot kaam yahi se chalayenge"""
-    asyncio.create_task(bot1_scan_coindcx_async())
-    asyncio.create_task(bot2_supertrend_short_async())
 
 def main():
     global telegram_app
@@ -430,7 +423,10 @@ def main():
     loop.run_until_complete(telegram_app.bot.set_webhook(url=WEBHOOK_URL))
     print(f"Webhook set to: {WEBHOOK_URL}", flush=True)
 
-    loop.create_task(run_bot_tasks())
+    # YE 2 LINE IMPORTANT HAI - BOT START KARENGE
+    loop.create_task(bot1_scan_coindcx_async())
+    loop.create_task(bot2_supertrend_short_async())
+
     app.run(host='0.0.0.0', port=10000)
 
 if __name__ == '__main__':
