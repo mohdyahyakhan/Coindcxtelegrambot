@@ -312,7 +312,7 @@ def bot1_scan_coindcx():
             pumped = 0
             for t in res:
                 market = t.get('market', '')
-                if market.endswith('USDT') and not market.startswith('B-'):
+                if market.endswith('USDT'):
                     base = market.replace('_USDT', '').replace('USDT', '')
                     symbol = f"{base}USDT"
                     price = float(t.get('last_price', '0'))
@@ -415,7 +415,7 @@ def run_telegram_bot():
     async def start():
         await telegram_app.initialize()
         await telegram_app.start()
-        await telegram_app.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        await telegram_app.updater.start_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
     loop.run_until_complete(start())
     loop.run_forever()
