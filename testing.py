@@ -304,7 +304,7 @@ async def bot1_scan_coindcx_async():
             pumped = 0
             for t in res:
                 market = t.get('market', '')
-                if market.endswith('USDT'): # B- FILTER HATA DIYA
+                if market.endswith('USDT'):
                     base = market.replace('_USDT', '').replace('USDT', '')
                     symbol = f"{base}USDT"
                     price = float(t.get('last_price', '0'))
@@ -314,7 +314,7 @@ async def bot1_scan_coindcx_async():
                     if len(TICKER_HISTORY[symbol]) > 1000: TICKER_HISTORY[symbol].pop(0)
 
                     try:
-                        change_str = str(t.get('change_24_hour', t.get('change_24h', t.get('price_change_24h', '0')))) # price_change_24h add
+                        change_str = str(t.get('change_24_hour', t.get('change_24h', t.get('price_change_24h', '0'))))
                         change_24h = float(change_str)
                         if change_24h >= PUMP_PERCENT_24H:
                             process_pump_alert(symbol, change_24h, price)
@@ -423,7 +423,7 @@ def main():
     loop.run_until_complete(telegram_app.bot.set_webhook(url=WEBHOOK_URL))
     print(f"Webhook set to: {WEBHOOK_URL}", flush=True)
 
-    # YE 2 LINE IMPORTANT HAI - BOT START KARENGE
+    # YE 2 LINE BOT START KARENGE
     loop.create_task(bot1_scan_coindcx_async())
     loop.create_task(bot2_supertrend_short_async())
 
