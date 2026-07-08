@@ -177,12 +177,17 @@ def save_ticker_history():
     last_ticker_save = time.time()
     print(f"Saved Ticker History: {len(data_to_save)} coins to Gist", flush=True)
 
-def send_telegram(msg):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
+def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}
-    try: requests.post(url, data=data, timeout=10)
-    except Exception as e: print(f"Telegram Error: {e}", flush=True)
+    payload = {
+        'chat_id': TELEGRAM_CHAT_ID,
+        'text': message,
+        'parse_mode': 'Markdown'
+    }
+    try:
+        requests.post(url, json=payload, timeout=10) # <-- YAHAN json= HAI, data= NAHI
+    except Exception as e:
+        print(f"Telegram send error: {e}", flush=True)
 
 def process_pump_alert(symbol, change_24h, price):
     if symbol in WATCHLIST:
