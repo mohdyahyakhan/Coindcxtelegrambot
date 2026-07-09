@@ -77,7 +77,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # <-- YAHAN BUG THEEK KIYA
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
     else:
@@ -234,7 +234,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
 # ===== TICKER FALLBACK + GIST SAVE =====
 def get_klines_coindcx(symbol, interval='5m', limit=351):
     base = symbol.replace('USDT', '')
-    pair = f"{base}-USDT" # <-- FIX: '-' ADD KIYA COINDCX KE LIYE
+    pair = f"{base}-USDT" # <-- FIX: '-' ADD KIYA COINDCX FUTURES KE LIYE
     url = "https://api.coindcx.com/exchange/v1/candles"
     params = {'pair': pair, 'interval': interval, 'limit': limit}
     try:
@@ -301,17 +301,17 @@ async def bot1_scan_coindcx_async():
     global last_ticker_save
     load_watchlist()
     load_ticker_history()
-    print("Bot1 started — ONLY CoinDCX Scan + Ticker Saver", flush=True)
+    print("Bot1 started — ONLY CoinDCX FUTURES Scan + Ticker Saver", flush=True)
     while True:
         try:
-            url = "https://api.coindcx.com/exchange/ticker"
+            url = "https://api.coindcx.com/derivatives/v1/ticker"
             headers = {'User-Agent': 'Mozilla/5.0'}
             res = requests.get(url, headers=headers, timeout=20).json()
             pumped = 0
             for t in res:
-                market = t.get('market', '')
+                market = t.get('symbol', '')
                 if market.endswith('USDT'):
-                    base = market.replace('_USDT', '').replace('USDT', '')
+                    base = market.replace('-USDT', '').replace('USDT', '')
                     symbol = f"{base}USDT"
                     price = float(t.get('last_price', '0'))
 
@@ -320,7 +320,7 @@ async def bot1_scan_coindcx_async():
                     if len(TICKER_HISTORY[symbol]) > 1000: TICKER_HISTORY[symbol].pop(0)
 
                     try:
-                        change_str = str(t.get('change_24_hour', t.get('change_24h', t.get('price_change_24h', '0'))))
+                        change_str = str(t.get('change24h', '0'))
                         change_24h = float(change_str)
                         if change_24h >= PUMP_PERCENT_24H:
                             process_pump_alert(symbol, change_24h, price)
@@ -330,7 +330,7 @@ async def bot1_scan_coindcx_async():
             if time.time() - last_ticker_save > 300:
                 save_ticker_history()
 
-            print(f"Bot1 [CoinDCX]: {len(res)} pairs checked | Pumped: {pumped} | Watchlist: {len(WATCHLIST)}\n", flush=True)
+            print(f"Bot1 [CoinDCX FUTURES]: {len(res)} pairs checked | Pumped: {pumped} | Watchlist: {len(WATCHLIST)}\n", flush=True)
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(300)
 
@@ -391,8 +391,6 @@ def show_watchlist(): return jsonify(WATCHLIST)
 @app.route('/papertrades')
 def show_papertrades(): return jsonify(PAPER_TRADES)
 
-# WEBHOOK HATA DIYA - SIRF POLLING
-
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().upper()
     await update.message.reply_text("Bhai command se baat kar 😅\n\n/ADD BTCUSDT\n/WATCHLIST\n/HELP")
@@ -417,7 +415,7 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True)) # <-- PURANA WEBHOOK HATAO
+    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
     print("Webhook deleted. Starting Polling...", flush=True)
 
     loop.create_task(bot1_scan_coindcx_async())
@@ -428,7 +426,7 @@ def main():
     flask_thread.start()
 
     print("Flask started in thread. Running bots with Polling...", flush=True)
-    loop.create_task(telegram_app.run_polling(drop_pending_updates=True)) # <-- SIRF POLLING
+    loop.create_task(telegram_app.run_polling(drop_pending_updates=True))
     loop.run_forever()
 
 if __name__ == '__main__':
