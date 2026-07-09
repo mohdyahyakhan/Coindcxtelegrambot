@@ -77,7 +77,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
+        WATCHLIST = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # <-- YAHI FIX KIYA
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
     else:
@@ -234,7 +234,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
 # ===== TICKER FALLBACK + GIST SAVE =====
 def get_klines_coindcx(symbol, interval='5m', limit=351):
     base = symbol.replace('USDT', '')
-    pair = f"{base}-USDT" # <-- FIX: '-' ADD KIYA COINDCX FUTURES KE LIYE
+    pair = f"{base}-USDT"
     url = "https://api.coindcx.com/exchange/v1/candles"
     params = {'pair': pair, 'interval': interval, 'limit': limit}
     try:
