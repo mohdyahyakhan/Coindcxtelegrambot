@@ -177,15 +177,15 @@ def save_ticker_history():
     last_ticker_save = time.time()
     print(f"Saved Ticker History: {len(data_to_save)} coins to Gist", flush=True)
 
-def send_telegram_message(message):
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         'chat_id': TELEGRAM_CHAT_ID,
         'text': message,
-        'parse_mode': 'Markdown'
+        'parse_mode': 'HTML'
     }
     try:
-        requests.post(url, json=payload, timeout=10) # <-- YAHAN json= HAI, data= NAHI
+        requests.post(url, json=payload, timeout=10)
     except Exception as e:
         print(f"Telegram send error: {e}", flush=True)
 
@@ -234,7 +234,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
 # ===== TICKER FALLBACK + GIST SAVE =====
 def get_klines_coindcx(symbol, interval='5m', limit=351):
     base = symbol.replace('USDT', '')
-    pair = f"{base}USDT"
+    pair = f"{base}-USDT" # <-- FIX: '-' ADD KIYA COINDCX KE LIYE
     url = "https://api.coindcx.com/exchange/v1/candles"
     params = {'pair': pair, 'interval': interval, 'limit': limit}
     try:
@@ -424,21 +424,17 @@ def main():
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    
-    # WEBHOOK HATA DIYA - POLLING CHALAYENGE
+
     loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
     print("Webhook deleted. Starting Polling...", flush=True)
 
-    # YE 2 LINE BOT START KARENGE
     loop.create_task(bot1_scan_coindcx_async())
     loop.create_task(bot2_supertrend_short_async())
 
-    # FLASK KO ALAG THREAD ME CHALAO
     flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000, use_reloader=False))
     flask_thread.daemon = True
     flask_thread.start()
 
-    # POLLING START
     print("Flask started in thread. Running bots with Polling...", flush=True)
     loop.create_task(telegram_app.run_polling(drop_pending_updates=True))
     loop.run_forever()
