@@ -77,7 +77,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'}
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # <-- YAHAN BUG THEEK KIYA
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
     else:
@@ -391,15 +391,7 @@ def show_watchlist(): return jsonify(WATCHLIST)
 @app.route('/papertrades')
 def show_papertrades(): return jsonify(PAPER_TRADES)
 
-# ===== WEBHOOK =====
-@app.route('/' + TELEGRAM_BOT_TOKEN, methods=['POST'])
-def webhook():
-    """Telegram webhook handler"""
-    if telegram_app:
-        json_str = request.get_data().decode('UTF-8')
-        update = Update.de_json(json_str, telegram_app.bot)
-        asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), asyncio.get_event_loop())
-    return 'ok'
+# WEBHOOK HATA DIYA - SIRF POLLING
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip().upper()
@@ -425,7 +417,7 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
+    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True)) # <-- PURANA WEBHOOK HATAO
     print("Webhook deleted. Starting Polling...", flush=True)
 
     loop.create_task(bot1_scan_coindcx_async())
@@ -436,7 +428,7 @@ def main():
     flask_thread.start()
 
     print("Flask started in thread. Running bots with Polling...", flush=True)
-    loop.create_task(telegram_app.run_polling(drop_pending_updates=True))
+    loop.create_task(telegram_app.run_polling(drop_pending_updates=True)) # <-- SIRF POLLING
     loop.run_forever()
 
 if __name__ == '__main__':
