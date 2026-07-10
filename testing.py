@@ -77,7 +77,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin = coin + "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # <-- YAHI FIX KIYA
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'not_short'} # FIX: coin ke liye dict
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} ko WATCHLIST me add kar diya")
     else:
@@ -139,9 +139,23 @@ def save_watchlist():
 def load_paper_trades():
     global PAPER_TRADES
     data = gist_get('paper_trades.json')
-    if data and 'trades' in data:
-        PAPER_TRADES = data['trades']
+    if data:
+        # FIX: agar string aa jaye to json me convert kar do
+        if isinstance(data, str):
+            try:
+                data = json.loads(data)
+            except:
+                data = {}
+
+        if isinstance(data, dict) and 'trades' in data:
+            PAPER_TRADES = data['trades']
+        elif isinstance(data, dict):
+            PAPER_TRADES = data
+        else:
+            PAPER_TRADES = {}
         print(f"Loaded {len(PAPER_TRADES)} paper trades from Gist", flush=True)
+    else:
+        PAPER_TRADES = {}
 
 def save_paper_trades():
     data = {'trades': PAPER_TRADES}
