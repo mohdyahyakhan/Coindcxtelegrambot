@@ -136,6 +136,7 @@ async def bot2_scan():
         except Exception as e: print(f"Bot2 Error: {e}", flush=True)
         await asyncio.sleep(30)
 
+
 def main():
     load_watchlist(); load_paper_trades(); load_total_pnl(); load_ticker_history()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
@@ -146,12 +147,16 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True)) # purane webhook ko maaro
-    loop.run_until_complete(telegram_app.bot.initialize()) # <-- YE NAYI LINE ADD KI HAI
+    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
+    loop.run_until_complete(telegram_app.bot.initialize())
 
+    # PEHLE FLASK CHALAO - 0.5 sec me up ho jayega
+    flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000, threaded=True), daemon=True)
+    flask_thread.start()
+    time.sleep(2) # Render ko time de do
+
+    # BAAD ME BOT CHALAO
     loop.create_task(bot1_scan())
     loop.create_task(bot2_scan())
-    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
+    
     loop.run_until_complete(telegram_app.run_polling(drop_pending_updates=True))
-
-if __name__ == '__main__': main()
