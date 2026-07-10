@@ -4,6 +4,8 @@ import time
 import os
 import json
 import asyncio
+import signal
+import sys
 from flask import Flask
 import pandas as pd
 from telegram import Update
@@ -97,7 +99,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin += "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'} # FIX: [coin] lagaya
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} added to watchlist")
     else:
@@ -114,7 +116,6 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = "\n".join([f"• {c}" for c in WATCHLIST.keys()]) if WATCHLIST else "Khali hai"
     await update.message.reply_text(f"<b>WATCHLIST</b>\n\n{coins}", parse_mode="HTML")
 
-# ========== BOT 1: DATA COLLECTOR ==========
 async def bot1_scan():
     global last_ticker_save
     load_watchlist(); load_ticker_history()
@@ -148,7 +149,6 @@ async def bot1_scan():
             print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(300)
 
-# ========== BOT 2: SIGNAL ENGINE ==========
 def calculate_supertrend(df, atr_period=10, multiplier=3):
     hl2 = (df['high'] + df['low']) / 2
     atr = df['high'].rolling(atr_period).max() - df['low'].rolling(atr_period).min()
@@ -188,9 +188,7 @@ async def bot2_scan():
                 last = df.iloc[-1]
                 prev = df.iloc[-2]
                 
-                # SIGNAL: Supertrend Flip from DOWN to UP
                 if not prev['in_uptrend'] and last['in_uptrend']:
-                    # 24h Pump Check
                     pump_24h = ((prices[-1] - prices[-288]) / prices[-288]) * 100 if len(prices) > 288 else 0
                     
                     if pump_24h < PUMP_PERCENT_24H:
@@ -221,9 +219,19 @@ def main():
     print(f"Flask started on port {port}", flush=True)
     time.sleep(3)
 
-    loop.create_task(bot1_scan())
-    loop.create_task(bot2_scan())
+    tasks = [
+        loop.create_task(bot1_scan()),
+        loop.create_task(bot2_scan())
+    ]
 
-    loop.run_until_complete(telegram_app.run_polling(drop_pending_updates=True))
+    try:
+        loop.run_until_complete(telegram_app.run_polling(drop_pending_updates=True))
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for task in tasks:
+            task.cancel()
+        loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
+        loop.close()
 
 if __name__ == '__main__': main()
