@@ -110,22 +110,31 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = "\n".join([f"• {c}" for c in WATCHLIST.keys()]) if WATCHLIST else "Khali hai"
     await update.message.reply_text(f"<b>WATCHLIST</b>\n\n{coins}", parse_mode="HTML")
 
+
 async def bot1_scan():
     global last_ticker_save
     load_watchlist(); load_ticker_history()
     print("Bot1 started", flush=True)
     while True:
         try:
-            res = requests.get("https://api.coindcx.com/derivatives/v1/ticker", timeout=20).json()
-            for t in res:
-                if 'USDT' in t['symbol']:
-                    symbol = t['symbol'].replace('-USDT','')+'USDT'
-                    price = float(t['last_price'])
-                    TICKER_HISTORY.setdefault(symbol,[]).append(price)
-                    if len(TICKER_HISTORY[symbol])>1000: TICKER_HISTORY[symbol].pop(0)
+            res = requests.get("https://api.coindcx.com/derivatives/v1/ticker", timeout=20)
+            res = res.json()
+            
+            # YE CHECK NAYI ADD KI HAI
+            if isinstance(res, list): # agar list hai tabhi loop chalao
+                for t in res:
+                    if isinstance(t, dict) and 'symbol' in t and 'USDT' in t['symbol']:
+                        symbol = t['symbol'].replace('-USDT','')+'USDT'
+                        price = float(t['last_price'])
+                        TICKER_HISTORY.setdefault(symbol,[]).append(price)
+                        if len(TICKER_HISTORY[symbol])>1000: TICKER_HISTORY[symbol].pop(0)
+            else:
+                print(f"Bot1: API ne list nahi bheji, ye mili: {type(res)}", flush=True)
+                
             if time.time()-last_ticker_save>300: save_ticker_history()
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(300)
+
 
 async def bot2_scan():
     print("Bot2 started", flush=True)
