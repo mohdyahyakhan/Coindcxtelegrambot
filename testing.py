@@ -86,7 +86,6 @@ def save_ticker_history():
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     requests.post(url, json={'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML'}, timeout=10)
-    
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coin = context.args[0].upper() if context.args else update.message.text.replace("ADD ", "").strip().upper()
@@ -99,7 +98,6 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ {coin} added")
     else:
         await update.message.reply_text(f"⚠️ {coin} already in watchlist")
-        
 
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coin = context.args[0].upper() if context.args else "BTCUSDT"
@@ -144,9 +142,13 @@ def main():
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
+
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
+
+    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True)) # purane webhook ko maaro
+    loop.run_until_complete(telegram_app.bot.initialize()) # <-- YE NAYI LINE ADD KI HAI
+
     loop.create_task(bot1_scan())
     loop.create_task(bot2_scan())
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000), daemon=True).start()
