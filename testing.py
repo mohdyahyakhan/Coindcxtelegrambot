@@ -118,8 +118,7 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def bot1_scan():
     global last_ticker_save
     load_watchlist(); load_ticker_history()
-    print("Bot1 started with FUTURES ticker", flush=True)
-    first_run = True
+    print("Bot1 started with FUTURES ticker V2", flush=True)
     while True:
         try:
             res = requests.get(
@@ -127,26 +126,36 @@ async def bot1_scan():
                 timeout=20
             ).json()
 
-            if first_run:
-                print(f"Bot1 DEBUG sample: {str(res)[:800]}", flush=True)
-                first_run = False
-
             if isinstance(res, list):
+                updated = 0
                 for t in res:
-                    if isinstance(t, dict) and 'USDT' in str(t):
-                        symbol = t.get('pair') or t.get('symbol') or t.get('instrument') or t.get('s')
-                        price = t.get('last_price') or t.get('mark_price') or t.get('ls') or t.get('l') or t.get('mp')
-                        if symbol and price:
-                            symbol = str(symbol).replace('B-','').replace('_','').upper()
-                            TICKER_HISTORY.setdefault(symbol,[]).append(float(price))
-                            if len(TICKER_HISTORY[symbol])>1000: TICKER_HISTORY[symbol].pop(0)
+                    if isinstance(t, dict):
+                        # CONFIRMED KEYS: pair and ls
+                        pair = t.get('pair') # B-BTC_USDT
+                        price_str = t.get('ls') # last_price
+                        
+                        if pair and price_str and 'USDT' in pair:
+                            # B-BTC_USDT -> BTCUSDT
+                            symbol = pair.replace('B-','').replace('_','')
+                            
+                            # Sirf watchlist wale hi save karo
+                            if symbol in WATCHLIST:
+                                price = float(price_str)
+                                TICKER_HISTORY.setdefault(symbol,[]).append(price)
+                                if len(TICKER_HISTORY[symbol])>1000: TICKER_HISTORY[symbol].pop(0)
+                                updated += 1
+                
+                if updated > 0:
+                    print(f"Bot1: Updated {updated} symbols", flush=True)
+
             else:
                 print(f"Bot1: API ne list nahi bheja: {str(res)[:300]}", flush=True)
 
             if time.time()-last_ticker_save>300: save_ticker_history()
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
-        await asyncio.sleep(300)
+        await asyncio.sleep(300) # 5 min
+
 
 async def bot2_scan():
     print("Bot2 started", flush=True)
