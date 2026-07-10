@@ -99,7 +99,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if coin not in WATCHLIST:
         WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
         save_watchlist()
-        await update.message.reply_text(f"✅ {coin} added")
+        await update.message.reply_text(f"✅ {coin} added to watchlist")
     else:
         await update.message.reply_text(f"⚠️ {coin} already in watchlist")
 
@@ -114,7 +114,7 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = "\n".join([f"• {c}" for c in WATCHLIST.keys()]) if WATCHLIST else "Khali hai"
     await update.message.reply_text(f"<b>WATCHLIST</b>\n\n{coins}", parse_mode="HTML")
 
-# YAHAN NAYA BOT1 PASTE KIYA
+# ========== BOT 1: DATA COLLECTOR ==========
 async def bot1_scan():
     global last_ticker_save
     load_watchlist(); load_ticker_history()
@@ -130,15 +130,10 @@ async def bot1_scan():
                 updated = 0
                 for t in res:
                     if isinstance(t, dict):
-                        # CONFIRMED KEYS: pair and ls
-                        pair = t.get('pair') # B-BTC_USDT
-                        price_str = t.get('ls') # last_price
-                        
+                        pair = t.get('pair')
+                        price_str = t.get('ls')
                         if pair and price_str and 'USDT' in pair:
-                            # B-BTC_USDT -> BTCUSDT
                             symbol = pair.replace('B-','').replace('_','')
-                            
-                            # Sirf watchlist wale hi save karo
                             if symbol in WATCHLIST:
                                 price = float(price_str)
                                 TICKER_HISTORY.setdefault(symbol,[]).append(price)
@@ -148,22 +143,63 @@ async def bot1_scan():
                 if updated > 0:
                     print(f"Bot1: Updated {updated} symbols", flush=True)
 
-            else:
-                print(f"Bot1: API ne list nahi bheja: {str(res)[:300]}", flush=True)
-
             if time.time()-last_ticker_save>300: save_ticker_history()
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
-        await asyncio.sleep(300) # 5 min
+        await asyncio.sleep(300)
 
+# ========== BOT 2: SIGNAL ENGINE ==========
+def calculate_supertrend(df, atr_period=10, multiplier=3):
+    hl2 = (df['high'] + df['low']) / 2
+    atr = df['high'].rolling(atr_period).max() - df['low'].rolling(atr_period).min()
+    upperband = hl2 + (multiplier * atr)
+    lowerband = hl2 - (multiplier * atr)
+    df['supertrend'] = lowerband
+    df['in_uptrend'] = True
+    for i in range(1, len(df)):
+        if df['close'][i] > upperband[i-1]:
+            df['in_uptrend'][i] = True
+        elif df['close'][i] < lowerband[i-1]:
+            df['in_uptrend'][i] = False
+        else:
+            df['in_uptrend'][i] = df['in_uptrend'][i-1]
+            if df['in_uptrend'][i] and lowerband[i] < lowerband[i-1]:
+                df['supertrend'][i] = lowerband[i-1]
+            if not df['in_uptrend'][i] and upperband[i] > upperband[i-1]:
+                df['supertrend'][i] = upperband[i-1]
+    return df
 
 async def bot2_scan():
-    print("Bot2 started", flush=True)
+    print("Bot2 started - Signal Engine", flush=True)
     while True:
         try:
             for symbol in list(WATCHLIST.keys()):
-                pass # yaha tera supertrend logic rahega
-        except Exception as e: print(f"Bot2 Error: {e}", flush=True)
+                if symbol not in TICKER_HISTORY or len(TICKER_HISTORY[symbol]) < ATR_PERIOD + 5:
+                    continue
+                
+                prices = TICKER_HISTORY[symbol]
+                df = pd.DataFrame({'close': prices})
+                df['high'] = df['close'].rolling(5).max()
+                df['low'] = df['close'].rolling(5).min()
+                
+                df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
+                
+                if len(df) < 2: continue
+                last = df.iloc[-1]
+                prev = df.iloc[-2]
+                
+                # SIGNAL: Supertrend Flip from DOWN to UP
+                if not prev['in_uptrend'] and last['in_uptrend']:
+                    # 24h Pump Check
+                    pump_24h = ((prices[-1] - prices[-288]) / prices[-288]) * 100 if len(prices) > 288 else 0
+                    
+                    if pump_24h < PUMP_PERCENT_24H:
+                        msg = f"🚨 <b>LONG SIGNAL</b> 🚨\n\n<b>{symbol}</b>\nPrice: {last['close']:.4f}\nSupertrend: BUY\n24h Pump: {pump_24h:.2f}%\n\n#ScalpingBot"
+                        send_telegram(msg)
+                        print(f"SIGNAL SENT: {symbol} at {last['close']}", flush=True)
+                        
+        except Exception as e: 
+            print(f"Bot2 Error: {e}", flush=True)
         await asyncio.sleep(30)
 
 def main():
