@@ -86,13 +86,20 @@ def save_ticker_history():
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     requests.post(url, json={'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML'}, timeout=10)
+    
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    coin = context.args[0].upper() if context.args else "BTCUSDT"
+    coin = context.args[0].upper() if context.args else update.message.text.replace("ADD ", "").strip().upper()
+    if not coin: return await update.message.reply_text("Use: /add BTCUSDT")
     if not coin.endswith("USDT"): coin += "USDT"
-    WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
-    save_watchlist()
-    await update.message.reply_text(f"✅ {coin} added")
+    global WATCHLIST
+    if coin not in WATCHLIST:
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'} # <-- YAHI FIX
+        save_watchlist()
+        await update.message.reply_text(f"✅ {coin} added")
+    else:
+        await update.message.reply_text(f"⚠️ {coin} already in watchlist")
+        
 
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coin = context.args[0].upper() if context.args else "BTCUSDT"
