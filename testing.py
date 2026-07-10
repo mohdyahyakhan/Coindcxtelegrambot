@@ -124,8 +124,8 @@ async def bot1_scan():
             res = requests.get("https://api.coindcx.com/derivatives/v1/ticker", timeout=20)
             res = res.json()
 
-            # SAFE CHECK
-            print(f"Bot1: response type={type(res)}", flush=True) # debug log add kiya
+            # SAFE CHECK + LOG
+            print(f"Bot1: response type={type(res)}", flush=True)
             if isinstance(res, list):
                 for t in res:
                     if isinstance(t, dict) and 'symbol' in t and 'USDT' in t['symbol']:
@@ -162,10 +162,11 @@ def main():
     loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
     loop.run_until_complete(telegram_app.bot.initialize())
 
-    # 1. PEHLE FLASK CHALAO - PORT DYNAMIC KIYA
+    # 1. PEHLE FLASK CHALAO - PORT DYNAMIC
     port = int(os.environ.get("PORT", 10000)) # RENDER WALA PORT LEGA
     flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, threaded=True), daemon=True)
     flask_thread.start()
+    print(f"Flask started on port {port}", flush=True) # confirm log
     time.sleep(3) # Render ko time de do
 
     # 2. BAAD ME BOT CHALAO
