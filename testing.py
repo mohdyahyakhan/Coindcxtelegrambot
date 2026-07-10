@@ -11,6 +11,11 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 app = Flask(__name__)
 
+# RENDER HEALTH CHECK KE LIYE YE ROUTE ZARURI HAI
+@app.route('/')
+def home():
+    return "Bot is Running", 200
+
 PUMP_PERCENT_24H = 40
 WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
@@ -50,14 +55,14 @@ def load_watchlist():
 
 def save_watchlist(): gist_save('watchlist.json', WATCHLIST)
 
-def load_paper_trades(): # YE FINAL FIX HAI
+def load_paper_trades():
     global PAPER_TRADES
     data = gist_get('paper_trades.json')
     if isinstance(data, dict) and 'trades' in data:
         PAPER_TRADES = data['trades']
     else:
         PAPER_TRADES = {}
-        gist_save('paper_trades.json', {'trades': {}}) # kharab hai to auto sahi kar dega
+        gist_save('paper_trades.json', {'trades': {}})
     print(f"Loaded {len(PAPER_TRADES)} paper trades", flush=True)
 
 def save_paper_trades(): gist_save('paper_trades.json', {'trades': PAPER_TRADES})
@@ -93,7 +98,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not coin.endswith("USDT"): coin += "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'} # <-- YAHI FIX
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} added")
     else:
@@ -110,7 +115,6 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = "\n".join([f"• {c}" for c in WATCHLIST.keys()]) if WATCHLIST else "Khali hai"
     await update.message.reply_text(f"<b>WATCHLIST</b>\n\n{coins}", parse_mode="HTML")
 
-
 async def bot1_scan():
     global last_ticker_save
     load_watchlist(); load_ticker_history()
@@ -119,9 +123,10 @@ async def bot1_scan():
         try:
             res = requests.get("https://api.coindcx.com/derivatives/v1/ticker", timeout=20)
             res = res.json()
-            
-            # YE CHECK NAYI ADD KI HAI
-            if isinstance(res, list): # agar list hai tabhi loop chalao
+
+            # SAFE CHECK
+            print(f"Bot1: response type={type(res)}", flush=True) # debug log add kiya
+            if isinstance(res, list):
                 for t in res:
                     if isinstance(t, dict) and 'symbol' in t and 'USDT' in t['symbol']:
                         symbol = t['symbol'].replace('-USDT','')+'USDT'
@@ -129,12 +134,11 @@ async def bot1_scan():
                         TICKER_HISTORY.setdefault(symbol,[]).append(price)
                         if len(TICKER_HISTORY[symbol])>1000: TICKER_HISTORY[symbol].pop(0)
             else:
-                print(f"Bot1: API ne list nahi bheji, ye mili: {type(res)}", flush=True)
-                
+                print(f"Bot1: API Error - {str(res)[:200]}", flush=True)
+
             if time.time()-last_ticker_save>300: save_ticker_history()
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(300)
-
 
 async def bot2_scan():
     print("Bot2 started", flush=True)
@@ -144,7 +148,6 @@ async def bot2_scan():
                 pass # yaha tera supertrend logic rahega
         except Exception as e: print(f"Bot2 Error: {e}", flush=True)
         await asyncio.sleep(30)
-
 
 def main():
     load_watchlist(); load_paper_trades(); load_total_pnl(); load_ticker_history()
@@ -159,13 +162,16 @@ def main():
     loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
     loop.run_until_complete(telegram_app.bot.initialize())
 
-    # PEHLE FLASK CHALAO - 0.5 sec me up ho jayega
-    flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=10000, threaded=True), daemon=True)
+    # 1. PEHLE FLASK CHALAO - PORT DYNAMIC KIYA
+    port = int(os.environ.get("PORT", 10000)) # RENDER WALA PORT LEGA
+    flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, threaded=True), daemon=True)
     flask_thread.start()
-    time.sleep(2) # Render ko time de do
+    time.sleep(3) # Render ko time de do
 
-    # BAAD ME BOT CHALAO
+    # 2. BAAD ME BOT CHALAO
     loop.create_task(bot1_scan())
     loop.create_task(bot2_scan())
-    
+
     loop.run_until_complete(telegram_app.run_polling(drop_pending_updates=True))
+
+if __name__ == '__main__': main()
