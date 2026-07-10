@@ -11,7 +11,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 app = Flask(__name__)
 
-# RENDER HEALTH CHECK KE LIYE YE ROUTE ZARURI HAI
 @app.route('/')
 def home():
     return "Bot is Running", 200
@@ -115,29 +114,38 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = "\n".join([f"• {c}" for c in WATCHLIST.keys()]) if WATCHLIST else "Khali hai"
     await update.message.reply_text(f"<b>WATCHLIST</b>\n\n{coins}", parse_mode="HTML")
 
+# YAHAN NAYA BOT1 PASTE KIYA
 async def bot1_scan():
     global last_ticker_save
     load_watchlist(); load_ticker_history()
-    print("Bot1 started", flush=True)
+    print("Bot1 started with FUTURES ticker", flush=True)
+    first_run = True
     while True:
         try:
-            res = requests.get("https://api.coindcx.com/derivatives/v1/ticker", timeout=20)
-            res = res.json()
+            res = requests.get(
+                "https://api.coindcx.com/exchange/v1/derivatives/futures/data/active_instruments",
+                timeout=20
+            ).json()
 
-            # SAFE CHECK + LOG
-            print(f"Bot1: response type={type(res)}", flush=True)
+            if first_run:
+                print(f"Bot1 DEBUG sample: {str(res)[:800]}", flush=True)
+                first_run = False
+
             if isinstance(res, list):
                 for t in res:
-                    if isinstance(t, dict) and 'symbol' in t and 'USDT' in t['symbol']:
-                        symbol = t['symbol'].replace('-USDT','')+'USDT'
-                        price = float(t['last_price'])
-                        TICKER_HISTORY.setdefault(symbol,[]).append(price)
-                        if len(TICKER_HISTORY[symbol])>1000: TICKER_HISTORY[symbol].pop(0)
+                    if isinstance(t, dict) and 'USDT' in str(t):
+                        symbol = t.get('pair') or t.get('symbol') or t.get('instrument') or t.get('s')
+                        price = t.get('last_price') or t.get('mark_price') or t.get('ls') or t.get('l') or t.get('mp')
+                        if symbol and price:
+                            symbol = str(symbol).replace('B-','').replace('_','').upper()
+                            TICKER_HISTORY.setdefault(symbol,[]).append(float(price))
+                            if len(TICKER_HISTORY[symbol])>1000: TICKER_HISTORY[symbol].pop(0)
             else:
-                print(f"Bot1: API Error - {str(res)[:200]}", flush=True)
+                print(f"Bot1: API ne list nahi bheja: {str(res)[:300]}", flush=True)
 
             if time.time()-last_ticker_save>300: save_ticker_history()
-        except Exception as e: print(f"Bot1 Error: {e}", flush=True)
+        except Exception as e:
+            print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(300)
 
 async def bot2_scan():
@@ -162,14 +170,12 @@ def main():
     loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
     loop.run_until_complete(telegram_app.bot.initialize())
 
-    # 1. PEHLE FLASK CHALAO - PORT DYNAMIC
-    port = int(os.environ.get("PORT", 10000)) # RENDER WALA PORT LEGA
+    port = int(os.environ.get("PORT", 10000))
     flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, threaded=True), daemon=True)
     flask_thread.start()
-    print(f"Flask started on port {port}", flush=True) # confirm log
-    time.sleep(3) # Render ko time de do
+    print(f"Flask started on port {port}", flush=True)
+    time.sleep(3)
 
-    # 2. BAAD ME BOT CHALAO
     loop.create_task(bot1_scan())
     loop.create_task(bot2_scan())
 
