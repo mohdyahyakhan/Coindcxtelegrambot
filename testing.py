@@ -1,3 +1,5 @@
+import nest_asyncio
+nest_asyncio.apply() # <--- NAYA LINE 1
 import threading
 import requests
 import time
@@ -120,7 +122,7 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = ", ".join(WATCHLIST.keys()) if WATCHLIST else "Empty"
     await update.message.reply_text(f"Watchlist: {coins}")
 
-# ===== KLINES (REAL CANDLES — Bybit primary, CoinDCX fallback) =====
+# ===== KLINES =====
 def get_klines_bybit(symbol, interval='5', limit=351):
     url = "https://api.bybit.com/v5/market/kline"
     params = {'category': 'linear', 'symbol': symbol, 'interval': interval, 'limit': limit}
@@ -268,7 +270,7 @@ async def bot1_scan():
             print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(300)
 
-# ===== BOT2 - YAHAN FIX KIYA HAI =====
+# ===== BOT2 =====
 async def bot2_scan():
     print("Bot2: Started", flush=True)
     while True:
@@ -277,7 +279,6 @@ async def bot2_scan():
                 await asyncio.sleep(30)
                 continue
             for symbol in list(WATCHLIST.keys()):
-                # NAYA TRY-EXCEPT ADD KIYA
                 try:
                     df = get_klines(symbol)
                 except Exception as e:
@@ -352,6 +353,7 @@ async def main():
     await telegram_app.initialize()
 
     port = int(os.environ.get("PORT", 10000))
+    # NAYA LINE 2: Flask ko thread me daemon=True ke saath
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
 
     asyncio.create_task(bot1_scan())
@@ -360,4 +362,5 @@ async def main():
     await telegram_app.run_polling()
 
 if __name__ == '__main__':
+    # NAYA LINE 3: nest_asyncio ke saath run
     asyncio.run(main())
