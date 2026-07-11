@@ -37,7 +37,7 @@ TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 total_pnl_lifetime = 0.0
 last_ticker_save = 0
 
-# ===== GIST HELPERS - YE MISSING THE =====
+# ===== GIST HELPERS =====
 def gist_get(filename):
     try:
         r = requests.get(GIST_URL, headers=GIST_HEADERS, timeout=10)
@@ -73,8 +73,9 @@ def load_watchlist():
             if isinstance(details, dict):
                 WATCHLIST[symbol] = details
                 WATCHLIST[symbol].setdefault('last_state', 'reset')
-                WATCHLIST[symbol].setdefault('prices', [])
                 WATCHLIST[symbol].setdefault('cross_count', 0)
+                # purana 'prices' field ab zaroori nahi (candles seedha exchange se aate hain)
+                WATCHLIST[symbol].pop('prices', None)
     print(f"Loaded {len(WATCHLIST)} coins", flush=True)
 
 def save_paper_trades():
@@ -105,7 +106,7 @@ def send_telegram(message):
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
-        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset', 'prices': []}
+        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
         save_watchlist()
         await update.message.reply_text(f"{symbol} added to watchlist")
 
@@ -120,17 +121,109 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = ", ".join(WATCHLIST.keys()) if WATCHLIST else "Empty"
     await update.message.reply_text(f"Watchlist: {coins}")
 
-# ===== INDICATORS =====
-def calculate_supertrend(df, period, multiplier):
+# ===== KLINES (REAL CANDLES — Bybit primary, CoinDCX fallback) =====
+def get_klines_bybit(symbol, interval='5', limit=351):
+    url = "https://api.bybit.com/v5/market/kline"
+    params = {'category': 'linear', 'symbol': symbol, 'interval': interval, 'limit': limit}
+    try:
+        res = requests.get(url, params=params, timeout=15).json()
+        if res.get('retCode') == 0 and res['result']['list']:
+            data = res['result']['list']
+            df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
+            df = df.astype({'timestamp': 'int64', 'open': float, 'high': float, 'low': float, 'close': float})
+            df = df.iloc[::-1].reset_index(drop=True)
+            df = df.iloc[:-1].reset_index(drop=True)  # last candle abhi banni baaki hai, drop karo
+            if len(df) < EMA_PERIOD + 50:
+                return None
+            return df
+    except Exception as e:
+        print(f"Bybit Kline Error {symbol}: {e}", flush=True)
+    return None
+
+def get_klines_coindcx(symbol, interval='5m', limit=351):
+    base = symbol.replace('USDT', '')
+    pair = f"F-{base}_USDT"
+    url = "https://api.coindcx.com/exchange/v1/candles"
+    params = {'pair': pair, 'interval': interval, 'limit': limit}
+    try:
+        res = requests.get(url, params=params, timeout=15)
+        data = res.json()
+        if not data or not isinstance(data, list):
+            return None
+        df = pd.DataFrame(data)
+        df = df.rename(columns={'time': 'timestamp'})
+        df['timestamp'] = df['timestamp'].astype('int64')
+        df['open'] = df['open'].astype(float)
+        df['high'] = df['high'].astype(float)
+        df['low'] = df['low'].astype(float)
+        df['close'] = df['close'].astype(float)
+        df = df[['timestamp', 'open', 'high', 'low', 'close']]
+        df = df.sort_values('timestamp').reset_index(drop=True)
+        df = df.iloc[:-1].reset_index(drop=True)
+        if len(df) < EMA_PERIOD + 50:
+            return None
+        return df
+    except Exception as e:
+        print(f"CoinDCX Kline Error {symbol}: {e}", flush=True)
+    return None
+
+def get_klines(symbol, interval='5'):
+    df = get_klines_bybit(symbol, interval=interval)
+    if df is not None:
+        return df
+    return get_klines_coindcx(symbol, interval=f"{interval}m")
+
+# ===== INDICATORS (proper Supertrend, band-flip logic) =====
+def calculate_supertrend(df, period=10, multiplier=3):
+    df = df.copy()
+    df['h-l'] = df['high'] - df['low']
+    df['h-pc'] = abs(df['high'] - df['close'].shift(1))
+    df['l-pc'] = abs(df['low'] - df['close'].shift(1))
+    df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
+    df['atr'] = df['tr'].ewm(alpha=1 / period, adjust=False).mean()
     hl2 = (df['high'] + df['low']) / 2
-    atr = df['high'].rolling(period).max() - df['low'].rolling(period).min()
-    df['st_line'] = hl2 - (multiplier * atr)
-    df['ema_val'] = df['close'].ewm(span=EMA_PERIOD).mean()
+    df['upperband'] = hl2 + (multiplier * df['atr'])
+    df['lowerband'] = hl2 - (multiplier * df['atr'])
+    df['final_upperband'] = 0.0
+    df['final_lowerband'] = 0.0
+    df['supertrend'] = True
+    df['st_line'] = 0.0
+    for i in range(len(df)):
+        if i == 0:
+            df.loc[df.index[i], 'final_upperband'] = df['upperband'].iloc[i]
+            df.loc[df.index[i], 'final_lowerband'] = df['lowerband'].iloc[i]
+            df.loc[df.index[i], 'st_line'] = df['upperband'].iloc[i]
+            continue
+        if (df['upperband'].iloc[i] < df['final_upperband'].iloc[i - 1] or
+                df['close'].iloc[i - 1] > df['final_upperband'].iloc[i - 1]):
+            df.loc[df.index[i], 'final_upperband'] = df['upperband'].iloc[i]
+        else:
+            df.loc[df.index[i], 'final_upperband'] = df['final_upperband'].iloc[i - 1]
+        if (df['lowerband'].iloc[i] > df['final_lowerband'].iloc[i - 1] or
+                df['close'].iloc[i - 1] < df['final_lowerband'].iloc[i - 1]):
+            df.loc[df.index[i], 'final_lowerband'] = df['lowerband'].iloc[i]
+        else:
+            df.loc[df.index[i], 'final_lowerband'] = df['final_lowerband'].iloc[i - 1]
+        prev_st = df['supertrend'].iloc[i - 1]
+        close_i = df['close'].iloc[i]
+        if prev_st and close_i < df['final_lowerband'].iloc[i]:
+            df.loc[df.index[i], 'supertrend'] = False
+        elif not prev_st and close_i > df['final_upperband'].iloc[i]:
+            df.loc[df.index[i], 'supertrend'] = True
+        else:
+            df.loc[df.index[i], 'supertrend'] = prev_st
+        if df['supertrend'].iloc[i]:
+            df.loc[df.index[i], 'st_line'] = df['final_lowerband'].iloc[i]
+        else:
+            df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
+
+    ema_raw = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
+    df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
     return df
 
 def check_paper_trades(df, symbol):
     global total_pnl_lifetime
-    if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!= 'OPEN': return
+    if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status'] != 'OPEN': return
     trade = PAPER_TRADES[symbol]
     current_price = df['close'].iloc[-1]
     if current_price <= trade['tp'] or current_price >= trade['sl']:
@@ -145,15 +238,14 @@ def check_paper_trades(df, symbol):
         send_telegram(msg)
         save_paper_trades()
 
-# ===== BOT1 =====
-
+# ===== BOT1 (pump scanner — sirf watchlist me add karta hai) =====
 async def bot1_scan():
     global last_ticker_save
     print("Bot1: Started", flush=True)
     while True:
         try:
             res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=20).json()
-            updated = 0
+            added = 0
             if isinstance(res, list):
                 for t in res:
                     if not isinstance(t, dict):
@@ -164,49 +256,55 @@ async def bot1_scan():
                     symbol = market.replace('F-', '').replace('_USDT', '') + 'USDT'
                     try:
                         change_24h = float(t.get('change_24_hour', 0))
-                        price = float(t.get('last_price', 0))
                     except (TypeError, ValueError):
                         continue
                     if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
-                        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset', 'prices': []}
+                        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
                         print(f"Bot1: {symbol} +{change_24h:.2f}% added to watchlist", flush=True)
-                    if symbol in WATCHLIST:
-                        WATCHLIST[symbol]['prices'].append(price)
-                        if len(WATCHLIST[symbol]['prices']) > 1000:
-                            WATCHLIST[symbol]['prices'].pop(0)
-                        updated += 1
-            if updated > 0:
-                print(f"Bot1: Updated {updated} symbols", flush=True)
-            if time.time() - last_ticker_save > 300:
-                save_watchlist(); last_ticker_save = time.time()
+                        added += 1
+            if added > 0:
+                save_watchlist()
+                print(f"Bot1: {added} new coins added this cycle", flush=True)
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(300)
-# ===== BOT2 =====
+
+# ===== BOT2 (Supertrend signal engine — REAL candles use karta hai) =====
 async def bot2_scan():
     print("Bot2: Started", flush=True)
     while True:
         try:
+            if not WATCHLIST:
+                await asyncio.sleep(30)
+                continue
             for symbol in list(WATCHLIST.keys()):
-                prices = WATCHLIST[symbol].get('prices', [])
-                if len(prices) < EMA_PERIOD + 50: continue
-                df = pd.DataFrame({'close': prices})
-                df['high'] = df['close'].rolling(5).max()
-                df['low'] = df['close'].rolling(5).min()
-                df = df.dropna()
-                if len(df) < EMA_PERIOD + 2: continue
-                df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
+                df = get_klines(symbol)
+                if df is None or len(df) < EMA_PERIOD + 2:
+                    print(f"Bot2: [{symbol}] SKIP — candle data nahi mila", flush=True)
+                    continue
+                try:
+                    df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
+                except Exception as e:
+                    print(f"Bot2: [{symbol}] ST error: {e}", flush=True)
+                    continue
+
                 check_paper_trades(df, symbol)
+
                 st_line = df['st_line'].iloc[-1]
                 ema_val = df['ema_val'].iloc[-1]
                 close_price = df['close'].iloc[-1]
-                if any(math.isnan(v) for v in [st_line, ema_val, close_price]): continue
+                if any(math.isnan(v) for v in [st_line, ema_val, close_price]):
+                    continue
+
                 price_below_st = close_price < st_line
                 st_below_ema = st_line < ema_val
                 current_short = price_below_st and st_below_ema
                 reset_state = (close_price > st_line) and (st_line > ema_val)
                 last_state = WATCHLIST[symbol].get('last_state', 'reset')
                 new_cross = (last_state == 'reset' and current_short)
+
+                print(f"Bot2: [{symbol}] Price={close_price:.6f} | ST={st_line:.6f} | EMA{EMA_PERIOD}={ema_val:.6f} | SHORT={current_short}", flush=True)
+
                 if new_cross:
                     cross_count = WATCHLIST[symbol].get('cross_count', 0)
                     if cross_count < 3 and symbol not in PAPER_TRADES:
@@ -214,15 +312,23 @@ async def bot2_scan():
                         sl_price = round(close_price * 1.02, 6)
                         PAPER_TRADES[symbol] = {'entry': close_price, 'tp': tp_price, 'sl': sl_price, 'status': 'OPEN', 'time': time.time()}
                         save_paper_trades()
-                        print(f"📝 PAPER SHORT ENTRY: {symbol} @ {close_price:.4f}")
+                        print(f"📝 PAPER SHORT ENTRY: {symbol} @ {close_price:.4f}", flush=True)
                         msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Signal:</b> #{cross_count + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>TP 5%:</b> ${tp_price}\n<b>SL 2%:</b> ${sl_price}\n<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%"
                         send_telegram(msg)
-                        WATCHLIST[symbol]['cross_count'] += 1
-                WATCHLIST[symbol]['last_state'] = 'short' if current_short else 'reset' if reset_state else last_state
-                if time.time() - WATCHLIST[symbol]['time'] > WATCHLIST_DAYS * 86400: WATCHLIST.pop(symbol)
-                time.sleep(0.5)
+                        WATCHLIST[symbol]['cross_count'] = cross_count + 1
+
+                if current_short:
+                    WATCHLIST[symbol]['last_state'] = 'short'
+                elif reset_state:
+                    WATCHLIST[symbol]['last_state'] = 'reset'
+
+                if time.time() - WATCHLIST[symbol]['time'] > WATCHLIST_DAYS * 86400:
+                    WATCHLIST.pop(symbol, None)
+
+                await asyncio.sleep(1)  # rate-limit friendly gap between coins
             save_watchlist()
-        except Exception as e: print(f"Bot2 Error: {e}", flush=True)
+        except Exception as e:
+            print(f"Bot2 Error: {e}", flush=True)
         await asyncio.sleep(30)
 
 # ===== FLASK + MAIN =====
@@ -237,7 +343,6 @@ def main():
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
     loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
     loop.run_until_complete(telegram_app.initialize())
     port = int(os.environ.get("PORT", 10000))
