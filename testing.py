@@ -146,33 +146,42 @@ def check_paper_trades(df, symbol):
         save_paper_trades()
 
 # ===== BOT1 =====
+
 async def bot1_scan():
     global last_ticker_save
     print("Bot1: Started", flush=True)
     while True:
         try:
-            res = requests.get("https://api.coindcx.com/exchange/v1/derivatives/futures/data/active_instruments", timeout=20).json()
+            res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=20).json()
             updated = 0
             if isinstance(res, list):
                 for t in res:
-                    pair = t.get('pair', '')
-                    price_str = t.get('ls', '')
-                    change_24h = float(t.get('change_24_hour', 0)) * 100
-                    if pair and price_str and 'USDT' in pair:
-                        symbol = pair.replace('B-','').replace('_','')
-                        price = float(price_str)
-                        if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
-                            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset', 'prices': []}
-                            print(f"Bot1: {symbol} +{change_24h:.2f}% added to watchlist", flush=True)
-                        if symbol in WATCHLIST:
-                            WATCHLIST[symbol]['prices'].append(price)
-                            if len(WATCHLIST[symbol]['prices']) > 1000: WATCHLIST[symbol]['prices'].pop(0)
-                            updated += 1
-            if updated > 0: print(f"Bot1: Updated {updated} symbols", flush=True)
-            if time.time() - last_ticker_save > 300: save_watchlist(); last_ticker_save = time.time()
-        except Exception as e: print(f"Bot1 Error: {e}", flush=True)
+                    if not isinstance(t, dict):
+                        continue
+                    market = t.get('market', '')
+                    if not market.startswith('F-') or not market.endswith('_USDT'):
+                        continue
+                    symbol = market.replace('F-', '').replace('_USDT', '') + 'USDT'
+                    try:
+                        change_24h = float(t.get('change_24_hour', 0))
+                        price = float(t.get('last_price', 0))
+                    except (TypeError, ValueError):
+                        continue
+                    if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
+                        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset', 'prices': []}
+                        print(f"Bot1: {symbol} +{change_24h:.2f}% added to watchlist", flush=True)
+                    if symbol in WATCHLIST:
+                        WATCHLIST[symbol]['prices'].append(price)
+                        if len(WATCHLIST[symbol]['prices']) > 1000:
+                            WATCHLIST[symbol]['prices'].pop(0)
+                        updated += 1
+            if updated > 0:
+                print(f"Bot1: Updated {updated} symbols", flush=True)
+            if time.time() - last_ticker_save > 300:
+                save_watchlist(); last_ticker_save = time.time()
+        except Exception as e:
+            print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(300)
-
 # ===== BOT2 =====
 async def bot2_scan():
     print("Bot2: Started", flush=True)
@@ -228,6 +237,8 @@ def main():
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
     loop.run_until_complete(telegram_app.initialize())
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
