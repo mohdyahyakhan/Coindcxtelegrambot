@@ -4,19 +4,16 @@ import time
 import os
 import json
 import asyncio
-import signal
-import sys
-from flask import Flask
 import pandas as pd
+import numpy as np
+import math
+from flask import Flask, jsonify
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Bot is Running", 200
-
+# ===== CONFIG =====
 PUMP_PERCENT_24H = 40
 WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
@@ -30,40 +27,50 @@ GIST_URL = f"https://api.github.com/gists/{GIST_ID}"
 
 WATCHLIST = {}
 PAPER_TRADES = {}
-TICKER_HISTORY = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 total_pnl_lifetime = 0.0
 last_ticker_save = 0
 
+# ===== GIST HELPERS =====
 def gist_get(filename):
     try:
         res = requests.get(GIST_URL, headers=GIST_HEADERS, timeout=10).json()
         content = res['files'][filename]['content']
         return json.loads(content)
-    except: return None
+    except Exception as e:
+        print(f"Gist GET error {filename}: {e}", flush=True)
+        return None
 
 def gist_save(filename, data):
     try:
         payload = {"files": {filename: {"content": json.dumps(data, indent=2)}}}
         requests.patch(GIST_URL, headers=GIST_HEADERS, json=payload, timeout=10)
-    except: pass
+    except Exception as e:
+        print(f"Gist SAVE error {filename}: {e}", flush=True)
 
 def load_watchlist():
     global WATCHLIST
     data = gist_get('watchlist.json')
-    WATCHLIST = data if isinstance(data, dict) else {}
+    if data and 'coins' in data:
+        WATCHLIST = data['coins']
+    else:
+        WATCHLIST = {}
+    for symbol in WATCHLIST:
+        if 'last_state' not in WATCHLIST[symbol]:
+            WATCHLIST[symbol]['last_state'] = 'reset'
+    print(f"Loaded {len(WATCHLIST)} coins from Gist", flush=True)
 
-def save_watchlist(): gist_save('watchlist.json', WATCHLIST)
+def save_watchlist():
+    if not WATCHLIST: return
+    data = {'_config': {'pump': PUMP_PERCENT_24H, 'ema': EMA_PERIOD, 'days': WATCHLIST_DAYS}, 'coins': WATCHLIST}
+    gist_save('watchlist.json', data)
 
 def load_paper_trades():
     global PAPER_TRADES
     data = gist_get('paper_trades.json')
-    if isinstance(data, dict) and 'trades' in data:
-        PAPER_TRADES = data['trades']
-    else:
-        PAPER_TRADES = {}
-        gist_save('paper_trades.json', {'trades': {}})
+    if data and 'trades' in data: PAPER_TRADES = data['trades']
+    else: PAPER_TRADES = {}
     print(f"Loaded {len(PAPER_TRADES)} paper trades", flush=True)
 
 def save_paper_trades(): gist_save('paper_trades.json', {'trades': PAPER_TRADES})
@@ -71,137 +78,169 @@ def save_paper_trades(): gist_save('paper_trades.json', {'trades': PAPER_TRADES}
 def load_total_pnl():
     global total_pnl_lifetime
     data = gist_get('lifetime_pnl.json')
-    total_pnl_lifetime = data.get('total_pnl', 0.0) if isinstance(data, dict) else 0.0
+    if data and 'total_pnl' in data: total_pnl_lifetime = data['total_pnl']
 
 def save_total_pnl(value):
     global total_pnl_lifetime
+    if value == total_pnl_lifetime: return
     total_pnl_lifetime = value
     gist_save('lifetime_pnl.json', {'total_pnl': total_pnl_lifetime})
 
-def load_ticker_history():
-    global TICKER_HISTORY
-    data = gist_get('ticker_history.json')
-    TICKER_HISTORY = data if isinstance(data, dict) else {}
-
-def save_ticker_history():
-    global last_ticker_save
-    data_to_save = {k: v for k, v in TICKER_HISTORY.items() if k in WATCHLIST}
-    gist_save('ticker_history.json', data_to_save)
-    last_ticker_save = time.time()
-
-def send_telegram(message):
+def send_telegram(msg):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, json={'chat_id': TELEGRAM_CHAT_ID, 'text': message, 'parse_mode': 'HTML'}, timeout=10)
+    try: requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10)
+    except Exception as e: print(f"Telegram Error: {e}", flush=True)
 
+# ===== TELEGRAM COMMANDS =====
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    coin = context.args[0].upper() if context.args else update.message.text.replace("ADD ", "").strip().upper()
+    coin = context.args[0].upper() if context.args else ""
     if not coin: return await update.message.reply_text("Use: /add BTCUSDT")
     if not coin.endswith("USDT"): coin += "USDT"
     global WATCHLIST
     if coin not in WATCHLIST:
-        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'} # FIX: [coin] lagaya
+        WATCHLIST[coin] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset', 'prices': []}
         save_watchlist()
         await update.message.reply_text(f"✅ {coin} added to watchlist")
-    else:
-        await update.message.reply_text(f"⚠️ {coin} already in watchlist")
+    else: await update.message.reply_text(f"⚠️ {coin} already in watchlist")
 
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    coin = context.args[0].upper() if context.args else "BTCUSDT"
+    coin = context.args[0].upper() if context.args else ""
     if not coin.endswith("USDT"): coin += "USDT"
     WATCHLIST.pop(coin, None)
     save_watchlist()
     await update.message.reply_text(f"❌ {coin} removed")
 
 async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    coins = "\n".join([f"• {c}" for c in WATCHLIST.keys()]) if WATCHLIST else "Khali hai"
+    coins = "\n".join([f"• {c} | Cross: {WATCHLIST[c]['cross_count']}/3" for c in WATCHLIST.keys()]) if WATCHLIST else "Khali hai"
     await update.message.reply_text(f"<b>WATCHLIST</b>\n\n{coins}", parse_mode="HTML")
 
-async def bot1_scan():
-    global last_ticker_save
-    load_watchlist(); load_ticker_history()
-    print("Bot1 started with FUTURES ticker V2", flush=True)
-    while True:
-        try:
-            res = requests.get(
-                "https://api.coindcx.com/exchange/v1/derivatives/futures/data/active_instruments",
-                timeout=20
-            ).json()
-
-            if isinstance(res, list):
-                updated = 0
-                for t in res:
-                    if isinstance(t, dict):
-                        pair = t.get('pair')
-                        price_str = t.get('ls')
-                        if pair and price_str and 'USDT' in pair:
-                            symbol = pair.replace('B-','').replace('_','')
-                            if symbol in WATCHLIST:
-                                price = float(price_str)
-                                TICKER_HISTORY.setdefault(symbol,[]).append(price)
-                                if len(TICKER_HISTORY[symbol])>1000: TICKER_HISTORY[symbol].pop(0)
-                                updated += 1
-                
-                if updated > 0:
-                    print(f"Bot1: Updated {updated} symbols", flush=True)
-
-            if time.time()-last_ticker_save>300: save_ticker_history()
-        except Exception as e:
-            print(f"Bot1 Error: {e}", flush=True)
-        await asyncio.sleep(300)
-
-def calculate_supertrend(df, atr_period=10, multiplier=3):
+# ===== INDICATORS =====
+def calculate_supertrend(df, period=10, multiplier=3):
+    df = df.copy()
+    df['h-l'] = df['high'] - df['low']
+    df['h-pc'] = abs(df['high'] - df['close'].shift(1))
+    df['l-pc'] = abs(df['low'] - df['close'].shift(1))
+    df['tr'] = df[['h-l', 'h-pc', 'l-pc']].max(axis=1)
+    df['atr'] = df['tr'].ewm(alpha=1 / period, adjust=False).mean()
     hl2 = (df['high'] + df['low']) / 2
-    atr = df['high'].rolling(atr_period).max() - df['low'].rolling(atr_period).min()
-    upperband = hl2 + (multiplier * atr)
-    lowerband = hl2 - (multiplier * atr)
-    df['supertrend'] = lowerband
-    df['in_uptrend'] = True
+    df['upperband'] = hl2 + (multiplier * df['atr'])
+    df['lowerband'] = hl2 - (multiplier * df['atr'])
+    df['final_upperband'] = df['upperband']
+    df['final_lowerband'] = df['lowerband']
+    df['supertrend'] = True
+    df['st_line'] = df['upperband']
     for i in range(1, len(df)):
-        if df['close'][i] > upperband[i-1]:
-            df['in_uptrend'][i] = True
-        elif df['close'][i] < lowerband[i-1]:
-            df['in_uptrend'][i] = False
-        else:
-            df['in_uptrend'][i] = df['in_uptrend'][i-1]
-            if df['in_uptrend'][i] and lowerband[i] < lowerband[i-1]:
-                df['supertrend'][i] = lowerband[i-1]
-            if not df['in_uptrend'][i] and upperband[i] > upperband[i-1]:
-                df['supertrend'][i] = upperband[i-1]
+        if df['upperband'].iloc[i] < df['final_upperband'].iloc[i-1] or df['close'].iloc[i-1] > df['final_upperband'].iloc[i-1]:
+            df.loc[df.index[i], 'final_upperband'] = df['upperband'].iloc[i]
+        else: df.loc[df.index[i], 'final_upperband'] = df['final_upperband'].iloc[i-1]
+        if df['lowerband'].iloc[i] > df['final_lowerband'].iloc[i-1] or df['close'].iloc[i-1] < df['final_lowerband'].iloc[i-1]:
+            df.loc[df.index[i], 'final_lowerband'] = df['lowerband'].iloc[i]
+        else: df.loc[df.index[i], 'final_lowerband'] = df['final_lowerband'].iloc[i-1]
+        if df['supertrend'].iloc[i-1] and df['close'].iloc[i] < df['final_lowerband'].iloc[i]: df.loc[df.index[i], 'supertrend'] = False
+        elif not df['supertrend'].iloc[i-1] and df['close'].iloc[i] > df['final_upperband'].iloc[i]: df.loc[df.index[i], 'supertrend'] = True
+        else: df.loc[df.index[i], 'supertrend'] = df['supertrend'].iloc[i-1]
+        df.loc[df.index[i], 'st_line'] = df['final_lowerband'].iloc[i] if df['supertrend'].iloc[i] else df['final_upperband'].iloc[i]
+    df['ema_val'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean().rolling(9).mean()
     return df
 
+def check_paper_trades(df, symbol):
+    global total_pnl_lifetime
+    if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!= 'OPEN': return
+    trade = PAPER_TRADES[symbol]
+    current_price = df['close'].iloc[-1]
+    if current_price <= trade['tp'] or current_price >= trade['sl']:
+        hit_tp = current_price <= trade['tp']
+        exit_price = trade['tp'] if hit_tp else trade['sl']
+        pnl = ((trade['entry'] - exit_price) / trade['entry']) * 100
+        trade['status'] = 'CLOSED_TP' if hit_tp else 'CLOSED_SL'
+        trade['pnl'] = round(pnl, 2)
+        save_total_pnl(total_pnl_lifetime + pnl)
+        msg = f"{'✅' if hit_tp else '❌'} <b>PAPER TRADE CLOSED</b>\n\n<b>Coin:</b> {symbol}\n<b>PnL:</b> {pnl:.2f}%\n<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%"
+        send_telegram(msg)
+        save_paper_trades()
+
+# ===== BOT1: PRICE COLLECTOR - CoinDCX active_instruments =====
+async def bot1_scan():
+    global last_ticker_save
+    print("Bot1 started - CoinDCX Futures Price Collector", flush=True)
+    while True:
+        try:
+            res = requests.get("https://api.coindcx.com/exchange/v1/derivatives/futures/data/active_instruments", timeout=20).json()
+            updated = 0
+            if isinstance(res, list):
+                for t in res:
+                    pair = t.get('pair', '')
+                    price_str = t.get('ls', '')
+                    if pair and price_str and 'USDT' in pair:
+                        symbol = pair.replace('B-','').replace('_','')
+                        if symbol in WATCHLIST:
+                            price = float(price_str)
+                            WATCHLIST[symbol].setdefault('prices', []).append(price)
+                            if len(WATCHLIST[symbol]['prices']) > 1000: WATCHLIST[symbol]['prices'].pop(0)
+                            updated += 1
+            if updated > 0: print(f"Bot1: Updated {updated} symbols", flush=True)
+            if time.time() - last_ticker_save > 300: save_watchlist(); last_ticker_save = time.time()
+        except Exception as e: print(f"Bot1 Error: {e}", flush=True)
+        await asyncio.sleep(300)
+
+# ===== BOT2: SIGNAL ENGINE =====
 async def bot2_scan():
-    print("Bot2 started - Signal Engine", flush=True)
+    print("Bot2 started - PAPER Signal Engine", flush=True)
     while True:
         try:
             for symbol in list(WATCHLIST.keys()):
-                if symbol not in TICKER_HISTORY or len(TICKER_HISTORY[symbol]) < ATR_PERIOD + 5:
-                    continue
-                
-                prices = TICKER_HISTORY[symbol]
+                prices = WATCHLIST[symbol].get('prices', [])
+                if len(prices) < EMA_PERIOD + 50: continue
+
                 df = pd.DataFrame({'close': prices})
                 df['high'] = df['close'].rolling(5).max()
                 df['low'] = df['close'].rolling(5).min()
-                
+                df = df.dropna()
+                if len(df) < EMA_PERIOD + 2: continue
+
                 df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
-                
-                if len(df) < 2: continue
-                last = df.iloc[-1]
-                prev = df.iloc[-2]
-                
-                if not prev['in_uptrend'] and last['in_uptrend']:
-                    pump_24h = ((prices[-1] - prices[-288]) / prices[-288]) * 100 if len(prices) > 288 else 0
-                    
-                    if pump_24h < PUMP_PERCENT_24H:
-                        msg = f"🚨 <b>LONG SIGNAL</b> 🚨\n\n<b>{symbol}</b>\nPrice: {last['close']:.4f}\nSupertrend: BUY\n24h Pump: {pump_24h:.2f}%\n\n#ScalpingBot"
+                check_paper_trades(df, symbol)
+
+                st_line = df['st_line'].iloc[-1]
+                ema_val = df['ema_val'].iloc[-1]
+                close_price = df['close'].iloc[-1]
+                if any(math.isnan(v) for v in [st_line, ema_val, close_price]): continue
+
+                price_below_st = close_price < st_line
+                st_below_ema = st_line < ema_val
+                current_short = price_below_st and st_below_ema
+                reset_state = (close_price > st_line) and (st_line > ema_val)
+                last_state = WATCHLIST[symbol].get('last_state', 'reset')
+                new_cross = (last_state == 'reset' and current_short)
+
+                if new_cross:
+                    cross_count = WATCHLIST[symbol].get('cross_count', 0)
+                    if cross_count < 3 and symbol not in PAPER_TRADES:
+                        tp_price = round(close_price * 0.95, 6)
+                        sl_price = round(close_price * 1.02, 6)
+                        PAPER_TRADES[symbol] = {'entry': close_price, 'tp': tp_price, 'sl': sl_price, 'status': 'OPEN', 'time': time.time()}
+                        save_paper_trades()
+                        msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Signal:</b> #{cross_count + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>TP 5%:</b> ${tp_price}\n<b>SL 2%:</b> ${sl_price}\n<b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%"
                         send_telegram(msg)
-                        print(f"SIGNAL SENT: {symbol} at {last['close']}", flush=True)
-                        
-        except Exception as e: 
-            print(f"Bot2 Error: {e}", flush=True)
+                        WATCHLIST[symbol]['cross_count'] += 1
+                        print(f"Bot2: [{symbol}] PAPER SHORT #{cross_count + 1}", flush=True)
+
+                WATCHLIST[symbol]['last_state'] = 'short' if current_short else 'reset' if reset_state else last_state
+                if time.time() - WATCHLIST[symbol]['time'] > WATCHLIST_DAYS * 86400: WATCHLIST.pop(symbol)
+                time.sleep(0.5)
+            save_watchlist()
+        except Exception as e: print(f"Bot2 Error: {e}", flush=True)
         await asyncio.sleep(30)
 
+# ===== FLASK + MAIN =====
+@app.route('/')
+def home():
+    open_trades = sum(1 for t in PAPER_TRADES.values() if t['status'] == 'OPEN')
+    return f"Bot running. Watchlist: {len(WATCHLIST)} coins. Open Paper Trades: {open_trades}. Lifetime PnL: {total_pnl_lifetime:.2f}%"
+
 def main():
-    load_watchlist(); load_paper_trades(); load_total_pnl(); load_ticker_history()
+    load_watchlist(); load_paper_trades(); load_total_pnl()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
@@ -209,29 +248,13 @@ def main():
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-
-    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
-    loop.run_until_complete(telegram_app.bot.initialize())
+    loop.run_until_complete(telegram_app.initialize())
 
     port = int(os.environ.get("PORT", 10000))
-    flask_thread = threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, threaded=True), daemon=True)
-    flask_thread.start()
-    print(f"Flask started on port {port}", flush=True)
-    time.sleep(3)
+    threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port), daemon=True).start()
 
-    tasks = [
-        loop.create_task(bot1_scan()),
-        loop.create_task(bot2_scan())
-    ]
-
-    try:
-        loop.run_until_complete(telegram_app.run_polling(drop_pending_updates=True))
-    except KeyboardInterrupt:
-        pass
-    finally:
-        for task in tasks:
-            task.cancel()
-        loop.run_until_complete(asyncio.gather(*tasks, return_exceptions=True))
-        loop.close()
+    loop.create_task(bot1_scan())
+    loop.create_task(bot2_scan())
+    loop.run_until_complete(telegram_app.run_polling())
 
 if __name__ == '__main__': main()
