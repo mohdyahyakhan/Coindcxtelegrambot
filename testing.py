@@ -74,7 +74,6 @@ def load_watchlist():
                 WATCHLIST[symbol] = details
                 WATCHLIST[symbol].setdefault('last_state', 'reset')
                 WATCHLIST[symbol].setdefault('cross_count', 0)
-                # purana 'prices' field ab zaroori nahi (candles seedha exchange se aate hain)
                 WATCHLIST[symbol].pop('prices', None)
     print(f"Loaded {len(WATCHLIST)} coins", flush=True)
 
@@ -132,7 +131,7 @@ def get_klines_bybit(symbol, interval='5', limit=351):
             df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
             df = df.astype({'timestamp': 'int64', 'open': float, 'high': float, 'low': float, 'close': float})
             df = df.iloc[::-1].reset_index(drop=True)
-            df = df.iloc[:-1].reset_index(drop=True)  # last candle abhi banni baaki hai, drop karo
+            df = df.iloc[:-1].reset_index(drop=True)
             if len(df) < EMA_PERIOD + 50:
                 return None
             return df
@@ -173,7 +172,7 @@ def get_klines(symbol, interval='5'):
         return df
     return get_klines_coindcx(symbol, interval=f"{interval}m")
 
-# ===== INDICATORS (proper Supertrend, band-flip logic) =====
+# ===== INDICATORS =====
 def calculate_supertrend(df, period=10, multiplier=3):
     df = df.copy()
     df['h-l'] = df['high'] - df['low']
@@ -223,7 +222,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
 
 def check_paper_trades(df, symbol):
     global total_pnl_lifetime
-    if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status'] != 'OPEN': return
+    if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!= 'OPEN': return
     trade = PAPER_TRADES[symbol]
     current_price = df['close'].iloc[-1]
     if current_price <= trade['tp'] or current_price >= trade['sl']:
@@ -238,7 +237,7 @@ def check_paper_trades(df, symbol):
         send_telegram(msg)
         save_paper_trades()
 
-# ===== BOT1 (pump scanner — sirf watchlist me add karta hai) =====
+# ===== BOT1 =====
 async def bot1_scan():
     global last_ticker_save
     print("Bot1: Started", flush=True)
@@ -269,7 +268,7 @@ async def bot1_scan():
             print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(300)
 
-# ===== BOT2 (Supertrend signal engine — REAL candles use karta hai) =====
+# ===== BOT2 - YAHAN FIX KIYA HAI =====
 async def bot2_scan():
     print("Bot2: Started", flush=True)
     while True:
@@ -278,7 +277,14 @@ async def bot2_scan():
                 await asyncio.sleep(30)
                 continue
             for symbol in list(WATCHLIST.keys()):
-                df = get_klines(symbol)
+                # NAYA TRY-EXCEPT ADD KIYA
+                try:
+                    df = get_klines(symbol)
+                except Exception as e:
+                    print(f"Bot2: [{symbol}] Kline fetch failed: {e}", flush=True)
+                    await asyncio.sleep(5)
+                    continue
+
                 if df is None or len(df) < EMA_PERIOD + 2:
                     print(f"Bot2: [{symbol}] SKIP — candle data nahi mila", flush=True)
                     continue
@@ -325,7 +331,7 @@ async def bot2_scan():
                 if time.time() - WATCHLIST[symbol]['time'] > WATCHLIST_DAYS * 86400:
                     WATCHLIST.pop(symbol, None)
 
-                await asyncio.sleep(1)  # rate-limit friendly gap between coins
+                await asyncio.sleep(1)
             save_watchlist()
         except Exception as e:
             print(f"Bot2 Error: {e}", flush=True)
@@ -341,18 +347,16 @@ async def main():
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
-    
+
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
     await telegram_app.initialize()
-    
+
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
-    
-    # dono bot background me chalu
+
     asyncio.create_task(bot1_scan())
     asyncio.create_task(bot2_scan())
-    
-    # telegram polling start
+
     await telegram_app.run_polling()
 
 if __name__ == '__main__':
