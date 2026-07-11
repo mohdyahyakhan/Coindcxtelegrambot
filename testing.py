@@ -335,20 +335,25 @@ async def bot2_scan():
 @app.route('/')
 def home(): return jsonify({"status": "Bot Running"})
 
-def main():
+async def main():
     load_watchlist(); load_paper_trades(); load_total_pnl()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(telegram_app.bot.delete_webhook(drop_pending_updates=True))
-    loop.run_until_complete(telegram_app.initialize())
+    
+    await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+    await telegram_app.initialize()
+    
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
-    loop.create_task(bot1_scan())
-    loop.create_task(bot2_scan())
-    loop.run_until_complete(telegram_app.run_polling())
+    
+    # dono bot background me chalu
+    asyncio.create_task(bot1_scan())
+    asyncio.create_task(bot2_scan())
+    
+    # telegram polling start
+    await telegram_app.run_polling()
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    asyncio.run(main())
