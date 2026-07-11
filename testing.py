@@ -1,4 +1,3 @@
-recently full code
 import threading
 import requests
 import time
