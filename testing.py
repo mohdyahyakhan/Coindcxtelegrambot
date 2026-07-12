@@ -271,7 +271,7 @@ async def bot1_scan():
                 print(f"Bot1: {added} new coins added this cycle", flush=True)
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
-        await asyncio.sleep(300)
+        await asyncio.sleep(60)
 
 # ===== BOT2 =====
 async def bot2_scan():
@@ -279,7 +279,7 @@ async def bot2_scan():
     while True:
         try:
             if not WATCHLIST:
-                await asyncio.sleep(30)
+                (30)
                 continue
             for symbol in list(WATCHLIST.keys()):
                 try:
