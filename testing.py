@@ -1,5 +1,5 @@
 import nest_asyncio
-nest_asyncio.apply() # <--- NAYA LINE 1
+nest_asyncio.apply()
 import threading
 import requests
 import time
@@ -16,7 +16,6 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
 app = Flask(__name__)
 
-# Flask ke 200 wale log band
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
@@ -121,6 +120,10 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = ", ".join(WATCHLIST.keys()) if WATCHLIST else "Empty"
     await update.message.reply_text(f"Watchlist: {coins}")
+
+# ===== YE NAYA COMMAND ADD KIYA HAI =====
+async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"📊 <b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%", parse_mode="HTML")
 
 # ===== KLINES =====
 def get_klines_bybit(symbol, interval='5', limit=351):
@@ -348,12 +351,12 @@ async def main():
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
+    telegram_app.add_handler(CommandHandler("pnl", pnl_command)) # <-- YE LINE NAYI HAI
 
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
     await telegram_app.initialize()
 
     port = int(os.environ.get("PORT", 10000))
-    # NAYA LINE 2: Flask ko thread me daemon=True ke saath
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
 
     asyncio.create_task(bot1_scan())
@@ -362,5 +365,4 @@ async def main():
     await telegram_app.run_polling()
 
 if __name__ == '__main__':
-    # NAYA LINE 3: nest_asyncio ke saath run
     asyncio.run(main())
