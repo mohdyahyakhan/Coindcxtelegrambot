@@ -26,7 +26,7 @@ ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
 
-GIST_ID = "5ef25a569ac5dcb8b1a7425aab22cced"
+GIST_ID = "3cd614506e9a1671fb6c441f8604d191"
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GIST_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"}
 GIST_URL = f"https://api.github.com/gists/{GIST_ID}"
