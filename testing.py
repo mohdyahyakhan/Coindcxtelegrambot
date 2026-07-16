@@ -26,7 +26,7 @@ ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
 
-GIST_ID = "3cd614506e9a1671fb6c441f8604d191"
+GIST_ID = os.environ.get("GIST_ID") # <-- ENV SE LE RAHA HAI AB
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GIST_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"}
 GIST_URL = f"https://api.github.com/gists/{GIST_ID}"
@@ -103,6 +103,9 @@ def send_telegram(message):
     except: pass
 
 # ===== TELEGRAM COMMANDS =====
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE): # <-- /start add kiya
+    await update.message.reply_text("✅ Bot is Online\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/pnl")
+
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
@@ -121,7 +124,6 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = ", ".join(WATCHLIST.keys()) if WATCHLIST else "Empty"
     await update.message.reply_text(f"Watchlist: {coins}")
 
-# ===== YE NAYA COMMAND ADD KIYA HAI =====
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📊 <b>Lifetime PnL:</b> {total_pnl_lifetime:.2f}%", parse_mode="HTML")
 
@@ -279,7 +281,7 @@ async def bot2_scan():
     while True:
         try:
             if not WATCHLIST:
-                (30)
+                await asyncio.sleep(30) # <-- FIX KIYA
                 continue
             for symbol in list(WATCHLIST.keys()):
                 try:
@@ -348,10 +350,11 @@ def home(): return jsonify({"status": "Bot Running"})
 async def main():
     load_watchlist(); load_paper_trades(); load_total_pnl()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    telegram_app.add_handler(CommandHandler("start", start_command)) # <-- /start add
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
-    telegram_app.add_handler(CommandHandler("pnl", pnl_command)) # <-- YE LINE NAYI HAI
+    telegram_app.add_handler(CommandHandler("pnl", pnl_command))
 
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
     await telegram_app.initialize()
