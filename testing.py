@@ -361,7 +361,7 @@ async def bot2_scan():
 @app.route('/')
 def home(): return jsonify({"status": "Bot Running"})
 
-async def main_async(): # <-- ASYNC WAPAS LAYA
+async def main_async():
     load_watchlist(); load_paper_trades(); load_total_pnl()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start_command))
@@ -376,14 +376,14 @@ async def main_async(): # <-- ASYNC WAPAS LAYA
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
 
-    # Bot1 aur Bot2 ko task me daalo
     asyncio.create_task(bot1_scan())
     asyncio.create_task(bot2_scan())
 
     print("Your service is live", flush=True)
-    await telegram_app.run_polling() # <-- AWAIT WAPAS
+    await telegram_app.updater.start_polling() # <-- RUN_POLLING HATA KE YE LAGAO
+    await telegram_app.updater.idle()
 
-def main(): # <-- WRAPPER FUNCTION
+def main():
     asyncio.run(main_async())
 
 if __name__ == '__main__':
