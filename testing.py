@@ -372,6 +372,7 @@ async def main_async():
 
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
     await telegram_app.initialize()
+    await telegram_app.start() # <-- YE 2 LINE ADD KI
 
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
@@ -380,8 +381,13 @@ async def main_async():
     asyncio.create_task(bot2_scan())
 
     print("Your service is live", flush=True)
-    await telegram_app.updater.start_polling() # <-- RUN_POLLING HATA KE YE LAGAO
-    await telegram_app.updater.idle()
+    
+    # POLLING KO TASK ME DAAL DIYA
+    asyncio.create_task(telegram_app.updater.start_polling()) 
+    
+    # LOOP KO ZINDA RAKHNE KE LIYE
+    while True:
+        await asyncio.sleep(3600)
 
 def main():
     asyncio.run(main_async())
