@@ -250,19 +250,21 @@ async def bot1_scan():
     print("Bot1: Started", flush=True)
     while True:
         try:
-            res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=20).json()
+            res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=20)
+            res = res.json() if res.status_code == 200 else [] # <-- STATUS CHECK ADD
+            
             added = 0
             top_gainer = None
             top_change = -999
-            total_pairs = 0 # <-- NEW DEBUG
-            if isinstance(res, list):
+            total_pairs = 0
+            if isinstance(res, list) and len(res) > 0: # <-- LEN CHECK ADD
                 for t in res:
                     if not isinstance(t, dict):
                         continue
                     market = t.get('market', '')
                     if not market.startswith('F-') or not market.endswith('USDT'):
                         continue
-                    total_pairs += 1 # <-- NEW DEBUG
+                    total_pairs += 1
                     symbol = market.replace('F-', '').replace('USDT', '') + 'USDT'
                     try:
                         change_24h = float(t.get('change_24_hour', 0))
@@ -276,7 +278,10 @@ async def bot1_scan():
                         send_telegram(f"🚨 40% PUMP DETECTED 🚨\nCoin: {symbol}\n24h: +{change_24h:.2f}%")
                         print(f"Bot1: {symbol} +{change_24h:.2f}% added to watchlist", flush=True)
                         added += 1
-            print(f"Bot1 DEBUG: Total F-USDT pairs = {total_pairs} | Top gainer = {top_gainer} (+{top_change:.2f}%)", flush=True) # <-- UPDATED DEBUG
+                print(f"Bot1 DEBUG: Total F-USDT pairs = {total_pairs} | Top gainer = {top_gainer} (+{top_change:.2f}%)", flush=True)
+            else:
+                print(f"Bot1 DEBUG: API returned empty or error. Status: {res}", flush=True) # <-- NEW
+                
             if added > 0:
                 save_watchlist()
                 print(f"Bot1: {added} new coins added this cycle", flush=True)
