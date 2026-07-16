@@ -266,6 +266,7 @@ async def bot1_scan():
                         continue
                     if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
                         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
+                        send_telegram(f"🚨 40% PUMP DETECTED 🚨\nCoin: {symbol}\n24h: +{change_24h:.2f}%")
                         print(f"Bot1: {symbol} +{change_24h:.2f}% added to watchlist", flush=True)
                         added += 1
             if added > 0:
