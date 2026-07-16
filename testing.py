@@ -20,13 +20,13 @@ log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
 # ===== CONFIG =====
-PUMP_PERCENT_24H = 40
+PUMP_PERCENT_24H = 25 # TESTING KE LIYE 25 KIYA HAI. BAAD ME 40 KAR DENA
 WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
 
-GIST_ID = os.environ.get("GIST_ID") # <-- ENV SE LE RAHA HAI AB
+GIST_ID = os.environ.get("GIST_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GIST_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"}
 GIST_URL = f"https://api.github.com/gists/{GIST_ID}"
@@ -76,7 +76,7 @@ def load_watchlist():
                 WATCHLIST[symbol].setdefault('last_state', 'reset')
                 WATCHLIST[symbol].setdefault('cross_count', 0)
                 WATCHLIST[symbol].pop('prices', None)
-    print(f"Loaded {len(WATCHLIST)} coins", flush=True)
+    print(f"Gist Loaded: {len(WATCHLIST)} coins", flush=True) # <-- DEBUG ADD KIYA
 
 def save_paper_trades():
     gist_set('paper_trades.json', PAPER_TRADES)
@@ -103,7 +103,7 @@ def send_telegram(message):
     except: pass
 
 # ===== TELEGRAM COMMANDS =====
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE): # <-- /start add kiya
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Bot is Online\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/pnl")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -254,6 +254,7 @@ async def bot1_scan():
             added = 0
             top_gainer = None
             top_change = -999
+            total_pairs = 0 # <-- NEW DEBUG
             if isinstance(res, list):
                 for t in res:
                     if not isinstance(t, dict):
@@ -261,6 +262,7 @@ async def bot1_scan():
                     market = t.get('market', '')
                     if not market.startswith('F-') or not market.endswith('USDT'):
                         continue
+                    total_pairs += 1 # <-- NEW DEBUG
                     symbol = market.replace('F-', '').replace('USDT', '') + 'USDT'
                     try:
                         change_24h = float(t.get('change_24_hour', 0))
@@ -274,13 +276,13 @@ async def bot1_scan():
                         send_telegram(f"🚨 40% PUMP DETECTED 🚨\nCoin: {symbol}\n24h: +{change_24h:.2f}%")
                         print(f"Bot1: {symbol} +{change_24h:.2f}% added to watchlist", flush=True)
                         added += 1
-            print(f"Bot1 DEBUG: Top gainer this cycle = {top_gainer} (+{top_change:.2f}%)", flush=True)
+            print(f"Bot1 DEBUG: Total F-USDT pairs = {total_pairs} | Top gainer = {top_gainer} (+{top_change:.2f}%)", flush=True) # <-- UPDATED DEBUG
             if added > 0:
                 save_watchlist()
                 print(f"Bot1: {added} new coins added this cycle", flush=True)
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
-        await asyncio.sleep(60) # 5 min ki jagah 1 min kar diya testing ke liye
+        await asyncio.sleep(60)
 
 # ===== BOT2 =====
 async def bot2_scan():
@@ -288,7 +290,7 @@ async def bot2_scan():
     while True:
         try:
             if not WATCHLIST:
-                await asyncio.sleep(30) # <-- FIX KIYA
+                await asyncio.sleep(30)
                 continue
             for symbol in list(WATCHLIST.keys()):
                 try:
@@ -354,17 +356,20 @@ async def bot2_scan():
 @app.route('/')
 def home(): return jsonify({"status": "Bot Running"})
 
-async def main():
+def main(): # <-- ASYNC HATA DIYA
     load_watchlist(); load_paper_trades(); load_total_pnl()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    telegram_app.add_handler(CommandHandler("start", start_command)) # <-- /start add
+    telegram_app.add_handler(CommandHandler("start", start_command))
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
     telegram_app.add_handler(CommandHandler("pnl", pnl_command))
 
-    await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-    await telegram_app.initialize()
+    async def setup():
+        await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+        await telegram_app.initialize()
+
+    asyncio.run(setup()) # <-- SIRF SETUP KE LIYE RUN KIYA
 
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
@@ -372,7 +377,8 @@ async def main():
     asyncio.create_task(bot1_scan())
     asyncio.create_task(bot2_scan())
 
-    await telegram_app.run_polling()
+    print("Your service is live", flush=True)
+    telegram_app.run_polling() # <-- AWAIT HATA DIYA
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main() # <-- ASYNCIO.RUN HATA DIYA
