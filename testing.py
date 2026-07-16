@@ -356,7 +356,7 @@ async def bot2_scan():
 @app.route('/')
 def home(): return jsonify({"status": "Bot Running"})
 
-def main(): # <-- ASYNC HATA DIYA
+async def main_async(): # <-- ASYNC WAPAS LAYA
     load_watchlist(); load_paper_trades(); load_total_pnl()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start_command))
@@ -365,20 +365,21 @@ def main(): # <-- ASYNC HATA DIYA
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
     telegram_app.add_handler(CommandHandler("pnl", pnl_command))
 
-    async def setup():
-        await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-        await telegram_app.initialize()
-
-    asyncio.run(setup()) # <-- SIRF SETUP KE LIYE RUN KIYA
+    await telegram_app.bot.delete_webhook(drop_pending_updates=True)
+    await telegram_app.initialize()
 
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
 
+    # Bot1 aur Bot2 ko task me daalo
     asyncio.create_task(bot1_scan())
     asyncio.create_task(bot2_scan())
 
     print("Your service is live", flush=True)
-    telegram_app.run_polling() # <-- AWAIT HATA DIYA
+    await telegram_app.run_polling() # <-- AWAIT WAPAS
+
+def main(): # <-- WRAPPER FUNCTION
+    asyncio.run(main_async())
 
 if __name__ == '__main__':
-    main() # <-- ASYNCIO.RUN HATA DIYA
+    main()
