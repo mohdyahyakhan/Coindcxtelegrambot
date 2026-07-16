@@ -250,24 +250,24 @@ async def bot1_scan():
     print("Bot1: Started", flush=True)
     while True:
         try:
-            res = requests.get("https://api.coindcx.com/exchange/ticker", timeout=20)
-            res = res.json() if res.status_code == 200 else [] # <-- STATUS CHECK ADD
+            # COINDCX HATA KE BYBIT LAGAYA
+            url = "https://api.bybit.com/v5/market/tickers?category=linear"
+            res = requests.get(url, timeout=20).json()
             
             added = 0
             top_gainer = None
             top_change = -999
             total_pairs = 0
-            if isinstance(res, list) and len(res) > 0: # <-- LEN CHECK ADD
-                for t in res:
-                    if not isinstance(t, dict):
-                        continue
-                    market = t.get('market', '')
-                    if not market.startswith('F-') or not market.endswith('USDT'):
+            
+            if res.get('retCode') == 0 and 'list' in res['result']:
+                for t in res['result']['list']:
+                    market = t.get('symbol', '')
+                    if not market.endswith('USDT'): # Sirf USDT pairs
                         continue
                     total_pairs += 1
-                    symbol = market.replace('F-', '').replace('USDT', '') + 'USDT'
+                    symbol = market # BYBIT pehle se hi BTCUSDT format me hai
                     try:
-                        change_24h = float(t.get('change_24_hour', 0))
+                        change_24h = float(t.get('price24hPcnt', 0)) * 100 # Bybit % me 0.53 deta hai
                     except (TypeError, ValueError):
                         continue
                     if change_24h > top_change:
@@ -278,9 +278,9 @@ async def bot1_scan():
                         send_telegram(f"🚨 40% PUMP DETECTED 🚨\nCoin: {symbol}\n24h: +{change_24h:.2f}%")
                         print(f"Bot1: {symbol} +{change_24h:.2f}% added to watchlist", flush=True)
                         added += 1
-                print(f"Bot1 DEBUG: Total F-USDT pairs = {total_pairs} | Top gainer = {top_gainer} (+{top_change:.2f}%)", flush=True)
+                print(f"Bot1 DEBUG: Total BYBIT-USDT pairs = {total_pairs} | Top gainer = {top_gainer} (+{top_change:.2f}%)", flush=True)
             else:
-                print(f"Bot1 DEBUG: API returned empty or error. Status: {res}", flush=True) # <-- NEW
+                print(f"Bot1 DEBUG: Bybit API Error: {res}", flush=True)
                 
             if added > 0:
                 save_watchlist()
