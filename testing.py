@@ -257,19 +257,11 @@ def check_paper_trades(df, symbol):
         hit_tp = current_price <= trade['tp']
         exit_price = trade['tp'] if hit_tp else trade['sl']
 
-        # 1. Trade ka % PnL
         trade_pnl_percent = ((trade['entry'] - exit_price) / trade['entry']) * 100
-
-        # 2. Trade me kitna amount laga tha = 10% of balance
         trade_amount = trade['balance_at_entry'] * RISK_PER_TRADE
-
-        # 3. USDT me profit/loss
         trade_pnl_usdt = trade_amount * (trade_pnl_percent / 100)
 
-        # 4. Naya balance
         BALANCE_DATA['total_balance'] += trade_pnl_usdt
-
-        # 5. Lifetime PnL update
         BALANCE_DATA['lifetime_pnl_usdt'] = BALANCE_DATA['total_balance'] - BALANCE_DATA['starting_balance']
         BALANCE_DATA['lifetime_pnl_percent'] = (BALANCE_DATA['lifetime_pnl_usdt'] / BALANCE_DATA['starting_balance']) * 100
 
@@ -290,7 +282,7 @@ def check_paper_trades(df, symbol):
               f"<b>Lifetime PnL:</b> {BALANCE_DATA['lifetime_pnl_percent']:.2f}% / ${BALANCE_DATA['lifetime_pnl_usdt']:.2f}"
         send_telegram(msg)
 
-# ===== BOT1 =====
+# ===== BOT1 - UPDATED WITH TV LINK =====
 async def bot1_scan():
     global last_ticker_save
     print("Bot1: Started", flush=True)
@@ -306,9 +298,21 @@ async def bot1_scan():
                     symbol = market
                     try: change_24h = float(t.get('price24hPcnt', 0)) * 100
                     except: continue
+
                     if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
                         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
-                        send_telegram(f"🚨 40% PUMP DETECTED 🚨\nCoin: {symbol}\n24h: +{change_24h:.2f}%")
+
+                        # ===== NAYA: TRADINGVIEW + BYBIT LINK =====
+                        tv_symbol = f"BYBIT:{symbol}" # BYBIT:NIGHTUSDT
+                        tv_link = f"https://www.tradingview.com/symbols/{tv_symbol}/"
+                        bybit_link = f"https://www.bybit.com/trade/usdt/{symbol}"
+
+                        send_telegram(f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n"
+                                      f"<b>Coin:</b> {symbol}\n"
+                                      f"<b>24h:</b> +{change_24h:.2f}%\n\n"
+                                      f"📊 <a href='{tv_link}'>TradingView Chart Kholne</a>\n"
+                                      f"💱 <a href='{bybit_link}'>Bybit pe Trade Karne</a>")
+
                         print(f"Bot1: {symbol} +{change_24h:.2f}% added", flush=True)
                         added += 1
             if added > 0: save_watchlist()
@@ -351,14 +355,13 @@ async def bot2_scan():
                         tp_price = round(close_price * 0.95, 6)
                         sl_price = round(close_price * 1.02, 6)
 
-                        # NEW: Entry ke time balance save kar do
                         PAPER_TRADES[symbol] = {
                             'entry': close_price,
                             'tp': tp_price,
                             'sl': sl_price,
                             'status': 'OPEN',
                             'time': time.time(),
-                            'balance_at_entry': BALANCE_DATA['total_balance'] # YE NAYA HAI
+                            'balance_at_entry': BALANCE_DATA['total_balance']
                         }
                         save_paper_trades()
 
@@ -389,7 +392,7 @@ async def bot2_scan():
 def home(): return jsonify({"status": "Bot Running"})
 
 async def main_async():
-    load_watchlist(); load_paper_trades(); load_balance_data() # UPDATED
+    load_watchlist(); load_paper_trades(); load_balance_data()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start_command))
     telegram_app.add_handler(CommandHandler("add", add_command))
