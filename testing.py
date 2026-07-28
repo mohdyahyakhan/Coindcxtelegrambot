@@ -24,7 +24,7 @@ WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
-RISK_PER_TRADE = 0.10 # 10% of total balance per trade - NEW
+RISK_PER_TRADE = 0.10 # 10% of total balance per trade
 
 GIST_ID = os.environ.get("GIST_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
@@ -109,31 +109,43 @@ def load_balance_data():
 def send_telegram(message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML", "disable_web_page_preview": True}
     try: requests.post(url, json=payload, timeout=10)
     except: pass
 
 # ===== TELEGRAM COMMANDS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is Online\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/pnl")
+    await help_command(update, context)
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "📊 <b>BOT COMMANDS</b> 📊\n\n"
+        "Sab coin dekho: <code>/watchlist</code>\n"
+        "Coin add karo: <code>/add BTCUSDT</code>\n"
+        "Coin hatao: <code>/remove BTCUSDT</code>\n"
+        "Open trade dekho: <code>/open</code>\n"
+        "Paper trade profit/loss: <code>/pnl</code>\n"
+        "Sab command dekho: <code>/help</code>"
+    )
+    await update.message.reply_text(help_text, parse_mode="HTML")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
         save_watchlist()
-        await update.message.reply_text(f"{symbol} added to watchlist")
+        await update.message.reply_text(f"✅ {symbol} added to watchlist")
 
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
         WATCHLIST.pop(symbol, None)
         save_watchlist()
-        await update.message.reply_text(f"{symbol} removed")
+        await update.message.reply_text(f"🗑️ {symbol} removed")
 
 async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = ", ".join(WATCHLIST.keys()) if WATCHLIST else "Empty"
-    await update.message.reply_text(f"Watchlist: {coins}")
+    await update.message.reply_text(f"<b>Watchlist:</b> {coins}", parse_mode="HTML")
 
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = BALANCE_DATA
@@ -144,6 +156,43 @@ async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"<b>Lifetime PnL:</b> {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}",
         parse_mode="HTML"
     )
+
+# ===== NAYA: OPEN TRADES COMMAND =====
+async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    open_trades = [t for t, d in PAPER_TRADES.items() if d['status'] == 'OPEN']
+
+    if not open_trades:
+        await update.message.reply_text("📭 Koi open trade nahi hai")
+        return
+
+    msg = f"📊 <b>OPEN POSITIONS: {len(open_trades)}</b>\n\n"
+
+    for symbol in open_trades:
+        trade = PAPER_TRADES[symbol]
+        trade_amount = trade['balance_at_entry'] * RISK_PER_TRADE
+
+        # Live price fetch
+        try:
+            df = get_klines(symbol)
+            ltp = df['close'].iloc[-1] if df is not None else trade['entry']
+            live_pnl_percent = ((trade['entry'] - ltp) / trade['entry']) * 100 # SHORT
+            live_pnl_usdt = trade_amount * (live_pnl_percent / 100)
+            ltp_str = f"{ltp:.6f}"
+        except:
+            ltp_str = "N/A"
+            live_pnl_percent = 0
+            live_pnl_usdt = 0
+
+        msg += f"<b>Coin:</b> {symbol}\n" \
+               f"<b>Entry:</b> ${trade['entry']:.6f}\n" \
+               f"<b>LTP:</b> ${ltp_str}\n" \
+               f"<b>TP:</b> ${trade['tp']:.6f} | <b>SL:</b> ${trade['sl']:.6f}\n" \
+               f"<b>Amount:</b> ${trade_amount:.2f}\n" \
+               f"<b>Live PnL:</b> {live_pnl_percent:.2f}% / ${live_pnl_usdt:.2f}\n" \
+               f"━━━━━━━━━━━━\n"
+
+    msg += f"\n<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
+    await update.message.reply_text(msg, parse_mode="HTML")
 
 # ===== KLINES =====
 def get_klines_bybit(symbol, interval='5', limit=351):
@@ -282,7 +331,7 @@ def check_paper_trades(df, symbol):
               f"<b>Lifetime PnL:</b> {BALANCE_DATA['lifetime_pnl_percent']:.2f}% / ${BALANCE_DATA['lifetime_pnl_usdt']:.2f}"
         send_telegram(msg)
 
-# ===== BOT1 - UPDATED WITH TV LINK =====
+# ===== BOT1 - WITH TV + BINANCE FALLBACK LINK =====
 async def bot1_scan():
     global last_ticker_save
     print("Bot1: Started", flush=True)
@@ -302,16 +351,17 @@ async def bot1_scan():
                     if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
                         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
 
-                        # ===== NAYA: TRADINGVIEW + BYBIT LINK =====
-                        tv_symbol = f"BYBIT:{symbol}" # BYBIT:NIGHTUSDT
-                        tv_link = f"https://www.tradingview.com/symbols/{tv_symbol}/"
+                        # ===== TRADINGVIEW LINKS WITH FALLBACK =====
+                        tv_bybit = f"https://www.tradingview.com/symbols/BYBIT:{symbol}/"
+                        tv_binance = f"https://www.tradingview.com/symbols/BINANCE:{symbol}/"
                         bybit_link = f"https://www.bybit.com/trade/usdt/{symbol}"
 
                         send_telegram(f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n"
                                       f"<b>Coin:</b> {symbol}\n"
                                       f"<b>24h:</b> +{change_24h:.2f}%\n\n"
-                                      f"📊 <a href='{tv_link}'>TradingView Chart Kholne</a>\n"
-                                      f"💱 <a href='{bybit_link}'>Bybit pe Trade Karne</a>")
+                                      f"📊 <a href='{tv_bybit}'>TV Chart Bybit</a>\n"
+                                      f"📊 <a href='{tv_binance}'>TV Chart Binance</a>\n"
+                                      f"💱 <a href='{bybit_link}'>Bybit Trade</a>")
 
                         print(f"Bot1: {symbol} +{change_24h:.2f}% added", flush=True)
                         added += 1
@@ -395,10 +445,12 @@ async def main_async():
     load_watchlist(); load_paper_trades(); load_balance_data()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     telegram_app.add_handler(CommandHandler("start", start_command))
+    telegram_app.add_handler(CommandHandler("help", help_command))
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
     telegram_app.add_handler(CommandHandler("pnl", pnl_command))
+    telegram_app.add_handler(CommandHandler("open", open_command)) # NAYA
 
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
     await telegram_app.initialize()
