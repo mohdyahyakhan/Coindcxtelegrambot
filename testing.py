@@ -220,7 +220,7 @@ async def bot1_scan():
             url = "https://api.bybit.com/v5/market/tickers?category=linear"
             res = requests.get(url, timeout=20).json()
             added = 0
-            if res.get('retCode') == 0 and 'list' in res['result']:
+            if res.get('retCode') == 0 and res.get('result') and 'list' in res.get('result', {}):
                 for t in res['result']['list']:
                     market = t.get('symbol', '')
                     if not market.endswith('USDT'): continue
