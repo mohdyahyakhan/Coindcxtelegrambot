@@ -294,7 +294,10 @@ async def main_async():
     asyncio.create_task(bot1_scan())
     asyncio.create_task(bot2_scan())
     print("Your service is live", flush=True)
-    await telegram_app.run_polling(drop_pending_updates=True)
+    
+    # YE 2 LINE NAYI HAI
+    await telegram_app.updater.start_polling(drop_pending_updates=True)
+    await telegram_app.updater.idle()
 
 def main(): asyncio.run(main_async())
 if __name__ == '__main__': main()
