@@ -411,7 +411,7 @@ async def main_async():
     asyncio.create_task(bot2_scan())
 
     print("Your service is live", flush=True)
-    # FIX: Yaha se change kiya hai - ab bot band nahi hoga
+    # ✅ YAHI FIX HAI - ab bot crash nahi hoga
     await telegram_app.run_polling(drop_pending_updates=True)
 
 def main():
