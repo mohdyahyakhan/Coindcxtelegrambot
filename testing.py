@@ -411,8 +411,8 @@ async def main_async():
     asyncio.create_task(bot2_scan())
 
     print("Your service is live", flush=True)
-    asyncio.create_task(telegram_app.updater.start_polling())
-    while True: await asyncio.sleep(3600)
+    # FIX: Yaha se change kiya hai - ab bot band nahi hoga
+    await telegram_app.run_polling(drop_pending_updates=True)
 
 def main():
     asyncio.run(main_async())
