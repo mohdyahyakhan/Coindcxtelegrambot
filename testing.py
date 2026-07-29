@@ -287,17 +287,15 @@ async def main_async():
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
     telegram_app.add_handler(CommandHandler("pnl", pnl_command))
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-    await telegram_app.initialize()
-    await telegram_app.start()
+    
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
     asyncio.create_task(bot1_scan())
     asyncio.create_task(bot2_scan())
     print("Your service is live", flush=True)
     
-    # YE 2 LINE NAYI HAI
-    await telegram_app.updater.start_polling(drop_pending_updates=True)
-    await telegram_app.updater.idle()
+    # BAS YE 1 LINE
+    await telegram_app.run_polling(drop_pending_updates=True)
 
 def main(): asyncio.run(main_async())
 if __name__ == '__main__': main()
