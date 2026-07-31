@@ -328,23 +328,21 @@ async def main_async():
     telegram_app.add_handler(CommandHandler("pnl", pnl_command))
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
 
-    # FLASK KO THREAD ME CHALAO
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
-
-    # BOTS KO TASK BANAO
     asyncio.create_task(bot1_scan())
     asyncio.create_task(bot2_scan())
 
-    # TELEGRAM KO SAHI TARIKE SE START KARO - YEHI FIX HAI
+    # RENDER KE LIYE SAHI TARIKA
     await telegram_app.initialize()
     await telegram_app.start()
     await telegram_app.updater.start_polling(drop_pending_updates=True)
 
     print("Your service is live", flush=True)
 
-    # BOT KO ZINDA RAKHNE KE LIYE
-    await telegram_app.updater.idle()
+    # IDLE KI JAGAH INFINITE LOOP
+    while True:
+        await asyncio.sleep(3600)
 
 def main():
     loop = asyncio.get_event_loop()
