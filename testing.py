@@ -1,5 +1,3 @@
-import nest_asyncio
-nest_asyncio.apply()
 import threading
 import requests
 import time
