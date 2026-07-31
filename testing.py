@@ -57,7 +57,7 @@ def gist_get(filename):
         return {}
     except Exception as e:
         print(f"Gist Get Error: {e}", flush=True)
-        return {} # Crash nahi karega, khali dict dega
+        return {}
 
 def gist_set(filename, content):
     if not GIST_URL or not GITHUB_TOKEN:
@@ -109,22 +109,62 @@ def send_telegram(message):
     except: pass
 
 # ===== TELEGRAM COMMANDS =====
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("✅ Bot is Online\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/pnl")
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot is Online\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/open\n/close SYMBOL\n/pnl")
+
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
         WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
         save_watchlist()
         await update.message.reply_text(f"{symbol} added to watchlist")
+
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
         WATCHLIST.pop(symbol, None)
         save_watchlist()
         await update.message.reply_text(f"{symbol} removed")
+
 async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = ", ".join(WATCHLIST.keys()) if WATCHLIST else "Empty"
     await update.message.reply_text(f"Watchlist: {coins}")
+
+# ===== NEW /open COMMAND =====
+async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    open_trades_list = {k:v for k,v in PAPER_TRADES.items() if v.get('status') == 'OPEN'}
+    if not open_trades_list:
+        await update.message.reply_text("📊 <b>No Open Trades</b>\n\nAbhi koi active paper trade nahi hai", parse_mode="HTML")
+        return
+
+    msg = "📊 <b>OPEN TRADES</b>\n\n"
+    for symbol, trade in open_trades_list.items():
+        entry = trade['entry']
+        tp = trade['tp']
+        sl = trade['sl']
+        balance = trade['balance_at_entry']
+        amount = balance * RISK_PER_TRADE
+        msg += f"<b>{symbol}</b> | SHORT\n"
+        msg += f"Entry: <code>${entry:.6f}</code>\n"
+        msg += f"TP: <code>${tp}</code> | SL: <code>${sl}</code>\n"
+        msg += f"Amount: <code>${amount:.2f}</code>\n\n"
+
+    msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
+    await update.message.reply_text(msg, parse_mode="HTML")
+
+# ===== NEW /close COMMAND =====
+async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("Use: /close SYMBOL")
+        return
+    symbol = context.args[0].upper()
+    if symbol in PAPER_TRADES and PAPER_TRADES[symbol]['status'] == 'OPEN':
+        PAPER_TRADES[symbol]['status'] = 'CLOSED_MANUAL'
+        save_paper_trades()
+        await update.message.reply_text(f"✅ {symbol} trade manually closed")
+    else:
+        await update.message.reply_text(f"{symbol} me koi open trade nahi hai")
+
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = BALANCE_DATA
     await update.message.reply_text(f"📊 <b>ACCOUNT SUMMARY</b>\n\n<b>Starting Balance:</b> ${bal['starting_balance']:.2f}\n<b>Current Balance:</b> ${bal['total_balance']:.2f}\n<b>Lifetime PnL:</b> {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}", parse_mode="HTML")
@@ -285,16 +325,17 @@ async def main_async():
     telegram_app.add_handler(CommandHandler("add", add_command))
     telegram_app.add_handler(CommandHandler("remove", remove_command))
     telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
+    telegram_app.add_handler(CommandHandler("open", open_command)) # NAYA
+    telegram_app.add_handler(CommandHandler("close", close_command)) # NAYA
     telegram_app.add_handler(CommandHandler("pnl", pnl_command))
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-    
+
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
     asyncio.create_task(bot1_scan())
     asyncio.create_task(bot2_scan())
     print("Your service is live", flush=True)
-    
-    # BAS YE 1 LINE
+
     await telegram_app.run_polling(drop_pending_updates=True)
 
 def main(): asyncio.run(main_async())
