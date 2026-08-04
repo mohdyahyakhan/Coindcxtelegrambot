@@ -23,7 +23,7 @@ ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
 RISK_PER_TRADE = 0.10
-MIN_VOLUME_24H = 500000 # RLC jaise coin skip
+MIN_VOLUME_24H = 2000000 # CHANGE 1: 5Lakh se 20Lakh kar diya. Spam kam hoga
 
 GIST_ID = os.environ.get("GIST_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
@@ -34,7 +34,7 @@ WATCHLIST = {}
 PAPER_TRADES = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
-_lock = asyncio.Lock() # RACE CONDITION FIX
+_lock = asyncio.Lock()
 
 # ===== NEW BALANCE SYSTEM =====
 BALANCE_DATA = {"total_balance": 10000.0, "starting_balance": 10000.0, "lifetime_pnl_usdt": 0.0, "lifetime_pnl_percent": 0.0}
@@ -135,7 +135,7 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with _lock:
         if symbol in PAPER_TRADES and PAPER_TRADES[symbol]['status'] == 'OPEN':
             PAPER_TRADES[symbol]['status'] = 'CLOSED_MANUAL'
-            WATCHLIST.pop(symbol, None) # MANUAL CLOSE PAR BHI REMOVE
+            WATCHLIST.pop(symbol, None)
             save_paper_trades(); save_watchlist()
             return await update.message.reply_text(f"✅ {symbol} trade manually closed & removed")
     await update.message.reply_text(f"{symbol} me koi open trade nahi hai")
@@ -178,7 +178,6 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
     except Exception as e: print(f"CoinDCX Kline Error {symbol}: {e}", flush=True)
     return None
 
-# API RETRY LAGA DIYA
 def get_klines(symbol, interval='5'):
     for i in range(3):
         df = get_klines_bybit(symbol, interval=interval)
@@ -220,7 +219,7 @@ async def check_paper_trades(df, symbol):
         if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!= 'OPEN': return
         trade = PAPER_TRADES[symbol]
 
-    candle_low = df['low'].iloc[-1]; candle_high = df['high'].iloc[-1] # WICK CHECK
+    candle_low = df['low'].iloc[-1]; candle_high = df['high'].iloc[-1]
     tp_hit = candle_low <= trade['tp']; sl_hit = candle_high >= trade['sl']
 
     if tp_hit or sl_hit:
@@ -233,11 +232,11 @@ async def check_paper_trades(df, symbol):
             BALANCE_DATA['lifetime_pnl_usdt'] = BALANCE_DATA['total_balance'] - BALANCE_DATA['starting_balance']
             BALANCE_DATA['lifetime_pnl_percent'] = (BALANCE_DATA['lifetime_pnl_usdt'] / BALANCE_DATA['starting_balance']) * 100
 
-            if tp_hit: # REQ 1: TP hit = REMOVE
+            if tp_hit:
                 PAPER_TRADES[symbol]['status'] = 'CLOSED_TP'
                 remove_from_watchlist = True
                 status_emoji = '✅'
-            else: # REQ 2: SL hit = NEXT ATTEMPT
+            else:
                 PAPER_TRADES[symbol]['status'] = 'CLOSED_SL'
                 status_emoji = '❌'
                 if PAPER_TRADES[symbol].get('attempt', 1) >= 3:
@@ -267,7 +266,7 @@ async def bot1_scan():
                     symbol = market
                     try: change_24h = float(t.get('price24hPcnt', 0)) * 100; volume_24h = float(t.get('volume24h', 0)); last_price = float(t.get('lastPrice', 0))
                     except: continue
-                    if volume_24h < MIN_VOLUME_24H or last_price < 0.001 or '.P' in symbol: continue # FILTER
+                    if volume_24h < MIN_VOLUME_24H or last_price < 0.001 or '.P' in symbol: continue
                     async with _lock:
                         if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
                             WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}; added += 1
@@ -289,7 +288,7 @@ async def bot2_scan():
                 if df is None: await asyncio.sleep(5); continue
                 if len(df) < EMA_PERIOD + 2: continue
                 df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
-                await check_paper_trades(df, symbol) # HAR BAR CHECK
+                await check_paper_trades(df, symbol)
 
                 st_line = df['st_line'].iloc[-1]; ema_val = df['ema_val'].iloc[-1]; close_price = df['close'].iloc[-1]
                 if any(math.isnan(v) for v in [st_line, ema_val, close_price]): continue
@@ -297,14 +296,17 @@ async def bot2_scan():
                 async with _lock:
                     if symbol not in WATCHLIST: continue
                     price_below_st = close_price < st_line; st_below_ema = st_line < ema_val; current_short = price_below_st and st_below_ema
-                    reset_state = (close_price > st_line) and (st_line > ema_val)
+
+                    # CHANGE 2: YAHI BUG THA. EMA HATA DIYA RESET SE
+                    reset_state = (close_price > st_line)
+
                     last_state = WATCHLIST[symbol].get('last_state', 'reset'); new_cross = (last_state == 'reset' and current_short)
 
                     open_trade = PAPER_TRADES.get(symbol)
                     open_trade_exists = open_trade and open_trade.get('status') == 'OPEN'
                     attempt = open_trade.get('attempt', 0) if open_trade else 0
 
-                    if new_cross and attempt < 3 and not open_trade_exists: # 3 ATTEMPT LOGIC
+                    if new_cross and attempt < 3 and not open_trade_exists:
                         tp_price = round(close_price * 0.95, 6); sl_price = round(close_price * 1.02, 6)
                         PAPER_TRADES[symbol] = {'entry': close_price, 'tp': tp_price, 'sl': sl_price, 'status': 'OPEN', 'time': time.time(), 'balance_at_entry': BALANCE_DATA['total_balance'], 'attempt': attempt + 1}
                         trade_amount = BALANCE_DATA['total_balance'] * RISK_PER_TRADE
