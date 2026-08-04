@@ -23,6 +23,7 @@ ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
 RISK_PER_TRADE = 0.10
+MIN_VOLUME_24H = 500000 # RLC jaise coin skip
 
 GIST_ID = os.environ.get("GIST_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
@@ -33,44 +34,32 @@ WATCHLIST = {}
 PAPER_TRADES = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
+_lock = asyncio.Lock() # RACE CONDITION FIX
 
 # ===== NEW BALANCE SYSTEM =====
 BALANCE_DATA = {"total_balance": 10000.0, "starting_balance": 10000.0, "lifetime_pnl_usdt": 0.0, "lifetime_pnl_percent": 0.0}
-last_ticker_save = 0
 
-# ===== GIST HELPERS - FIXED WITH TRY EXCEPT =====
+# ===== GIST HELPERS =====
 def gist_get(filename):
-    if not GIST_URL or not GITHUB_TOKEN:
-        print(f"Gist SKIPPED: GIST_ID or GITHUB_TOKEN missing", flush=True)
-        return {}
+    if not GIST_URL or not GITHUB_TOKEN: return {}
     try:
         r = requests.get(GIST_URL, headers=GIST_HEADERS, timeout=10)
-        if r.status_code!= 200:
-            print(f"Gist Get Failed {r.status_code}: {r.text}", flush=True)
-            return {}
+        if r.status_code!= 200: return {}
         gist_data = r.json()
         if filename in gist_data.get('files', {}):
             content = gist_data['files'][filename]['content']
             return json.loads(content) if content else {}
         return {}
-    except Exception as e:
-        print(f"Gist Get Error: {e}", flush=True)
-        return {}
+    except Exception as e: return {}
 
 def gist_set(filename, content):
-    if not GIST_URL or not GITHUB_TOKEN:
-        print(f"Gist SKIPPED: GIST_ID or GITHUB_TOKEN missing", flush=True)
-        return False
+    if not GIST_URL or not GITHUB_TOKEN: return False
     try:
         payload = {"files": {filename: {"content": json.dumps(content, indent=2)}}}
         r = requests.patch(GIST_URL, headers=GIST_HEADERS, json=payload, timeout=10)
-        if r.status_code!= 200:
-            print(f"Gist Set Failed {r.status_code}: {r.text}", flush=True)
-            return False
+        if r.status_code!= 200: return False
         return True
-    except Exception as e:
-        print(f"Gist Set Error: {e}", flush=True)
-        return False
+    except Exception as e: return False
 
 def save_watchlist(): gist_set('watchlist.json', {'coins': WATCHLIST})
 def load_watchlist():
@@ -86,9 +75,7 @@ def load_watchlist():
     print(f"Gist Loaded: {len(WATCHLIST)} coins", flush=True)
 
 def save_paper_trades(): gist_set('paper_trades.json', PAPER_TRADES)
-def load_paper_trades():
-    global PAPER_TRADES
-    PAPER_TRADES = gist_get('paper_trades.json') or {}
+def load_paper_trades(): global PAPER_TRADES; PAPER_TRADES = gist_get('paper_trades.json') or {}
 
 def save_balance_data(): gist_set('total_pnl.json', BALANCE_DATA)
 def load_balance_data():
@@ -113,14 +100,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
-        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
+        async with _lock: WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
         save_watchlist()
         await update.message.reply_text(f"{symbol} added to watchlist")
 
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
-        WATCHLIST.pop(symbol, None)
+        async with _lock: WATCHLIST.pop(symbol, None)
         save_watchlist()
         await update.message.reply_text(f"{symbol} removed")
 
@@ -128,46 +115,36 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = ", ".join(WATCHLIST.keys()) if WATCHLIST else "Empty"
     await update.message.reply_text(f"Watchlist: {coins}")
 
-# ===== NEW /open COMMAND =====
 async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     open_trades_list = {k:v for k,v in PAPER_TRADES.items() if v.get('status') == 'OPEN'}
     if not open_trades_list:
         await update.message.reply_text("📊 <b>No Open Trades</b>\n\nAbhi koi active paper trade nahi hai", parse_mode="HTML")
         return
-
     msg = "📊 <b>OPEN TRADES</b>\n\n"
     for symbol, trade in open_trades_list.items():
-        entry = trade['entry']
-        tp = trade['tp']
-        sl = trade['sl']
-        balance = trade['balance_at_entry']
-        amount = balance * RISK_PER_TRADE
-        msg += f"<b>{symbol}</b> | SHORT\n"
-        msg += f"Entry: <code>${entry:.6f}</code>\n"
-        msg += f"TP: <code>${tp}</code> | SL: <code>${sl}</code>\n"
-        msg += f"Amount: <code>${amount:.2f}</code>\n\n"
-
+        entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt',1)
+        amount = trade['balance_at_entry'] * RISK_PER_TRADE
+        msg += f"<b>{symbol}</b> | SHORT | Attempt #{attempt}/3\n"
+        msg += f"Entry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | SL: <code>${sl}</code>\nAmount: <code>${amount:.2f}</code>\n\n"
     msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
     await update.message.reply_text(msg, parse_mode="HTML")
 
-# ===== NEW /close COMMAND =====
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Use: /close SYMBOL")
-        return
+    if not context.args: return await update.message.reply_text("Use: /close SYMBOL")
     symbol = context.args[0].upper()
-    if symbol in PAPER_TRADES and PAPER_TRADES[symbol]['status'] == 'OPEN':
-        PAPER_TRADES[symbol]['status'] = 'CLOSED_MANUAL'
-        save_paper_trades()
-        await update.message.reply_text(f"✅ {symbol} trade manually closed")
-    else:
-        await update.message.reply_text(f"{symbol} me koi open trade nahi hai")
+    async with _lock:
+        if symbol in PAPER_TRADES and PAPER_TRADES[symbol]['status'] == 'OPEN':
+            PAPER_TRADES[symbol]['status'] = 'CLOSED_MANUAL'
+            WATCHLIST.pop(symbol, None) # MANUAL CLOSE PAR BHI REMOVE
+            save_paper_trades(); save_watchlist()
+            return await update.message.reply_text(f"✅ {symbol} trade manually closed & removed")
+    await update.message.reply_text(f"{symbol} me koi open trade nahi hai")
 
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = BALANCE_DATA
     await update.message.reply_text(f"📊 <b>ACCOUNT SUMMARY</b>\n\n<b>Starting Balance:</b> ${bal['starting_balance']:.2f}\n<b>Current Balance:</b> ${bal['total_balance']:.2f}\n<b>Lifetime PnL:</b> {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}", parse_mode="HTML")
 
-# ===== KLINES + INDICATORS + BOTS - SAME AS BEFORE =====
+# ===== KLINES + INDICATORS =====
 def get_klines_bybit(symbol, interval='5', limit=351):
     url = "https://api.bybit.com/v5/market/kline"
     params = {'category': 'linear', 'symbol': symbol, 'interval': interval, 'limit': limit}
@@ -177,8 +154,7 @@ def get_klines_bybit(symbol, interval='5', limit=351):
             data = res['result']['list']
             df = pd.DataFrame(data, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
             df = df.astype({'timestamp': 'int64', 'open': float, 'high': float, 'low': float, 'close': float})
-            df = df.iloc[::-1].reset_index(drop=True)
-            df = df.iloc[:-1].reset_index(drop=True)
+            df = df.iloc[::-1].reset_index(drop=True).iloc[:-1].reset_index(drop=True)
             if len(df) < EMA_PERIOD + 50: return None
             return df
     except Exception as e: print(f"Bybit Kline Error {symbol}: {e}", flush=True)
@@ -193,21 +169,23 @@ def get_klines_coindcx(symbol, interval='5m', limit=351):
         res = requests.get(url, params=params, timeout=15)
         data = res.json()
         if not data or not isinstance(data, list): return None
-        df = pd.DataFrame(data)
-        df = df.rename(columns={'time': 'timestamp'})
+        df = pd.DataFrame(data).rename(columns={'time': 'timestamp'})
         df['timestamp'] = df['timestamp'].astype('int64')
-        df['open'] = df['open'].astype(float); df['high'] = df['high'].astype(float); df['low'] = df['low'].astype(float); df['close'] = df['close'].astype(float)
-        df = df[['timestamp', 'open', 'high', 'low', 'close']]
-        df = df.sort_values('timestamp').reset_index(drop=True)
-        df = df.iloc[:-1].reset_index(drop=True)
+        df[['open','high','low','close']] = df[['open','high','low','close']].astype(float)
+        df = df[['timestamp', 'open', 'high', 'low', 'close']].sort_values('timestamp').reset_index(drop=True).iloc[:-1].reset_index(drop=True)
         if len(df) < EMA_PERIOD + 50: return None
         return df
     except Exception as e: print(f"CoinDCX Kline Error {symbol}: {e}", flush=True)
     return None
 
+# API RETRY LAGA DIYA
 def get_klines(symbol, interval='5'):
-    df = get_klines_bybit(symbol, interval=interval)
-    if df is not None: return df
+    for i in range(3):
+        df = get_klines_bybit(symbol, interval=interval)
+        if df is not None: return df
+        print(f"Bybit attempt {i+1} failed for {symbol}", flush=True)
+        time.sleep(2)
+    print(f"Bybit failed 3 times for {symbol}, trying CoinDCX", flush=True)
     return get_klines_coindcx(symbol, interval=f"{interval}m")
 
 def calculate_supertrend(df, period=10, multiplier=3):
@@ -235,41 +213,65 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
     return df
 
-def check_paper_trades(df, symbol):
+# ===== TERI STRATEGY: TP=REMOVE, SL=NEXT ATTEMPT =====
+async def check_paper_trades(df, symbol):
     global BALANCE_DATA
-    if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!= 'OPEN': return
-    trade = PAPER_TRADES[symbol]; current_price = df['close'].iloc[-1]
-    if current_price <= trade['tp'] or current_price >= trade['sl']:
-        hit_tp = current_price <= trade['tp']; exit_price = trade['tp'] if hit_tp else trade['sl']
-        trade_pnl_percent = ((trade['entry'] - exit_price) / trade['entry']) * 100
-        trade_amount = trade['balance_at_entry'] * RISK_PER_TRADE; trade_pnl_usdt = trade_amount * (trade_pnl_percent / 100)
-        BALANCE_DATA['total_balance'] += trade_pnl_usdt; BALANCE_DATA['lifetime_pnl_usdt'] = BALANCE_DATA['total_balance'] - BALANCE_DATA['starting_balance']
-        BALANCE_DATA['lifetime_pnl_percent'] = (BALANCE_DATA['lifetime_pnl_usdt'] / BALANCE_DATA['starting_balance']) * 100
-        trade['status'] = 'CLOSED_TP' if hit_tp else 'CLOSED_SL'; trade['pnl_percent'] = round(trade_pnl_percent, 2); trade['pnl_usdt'] = round(trade_pnl_usdt, 2)
+    async with _lock:
+        if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!= 'OPEN': return
+        trade = PAPER_TRADES[symbol]
+
+    candle_low = df['low'].iloc[-1]; candle_high = df['high'].iloc[-1] # WICK CHECK
+    tp_hit = candle_low <= trade['tp']; sl_hit = candle_high >= trade['sl']
+
+    if tp_hit or sl_hit:
+        exit_price = trade['tp'] if tp_hit else trade['sl']
+        remove_from_watchlist = False
+        async with _lock:
+            trade_pnl_percent = ((trade['entry'] - exit_price) / trade['entry']) * 100
+            trade_amount = trade['balance_at_entry'] * RISK_PER_TRADE; trade_pnl_usdt = trade_amount * (trade_pnl_percent / 100)
+            BALANCE_DATA['total_balance'] += trade_pnl_usdt
+            BALANCE_DATA['lifetime_pnl_usdt'] = BALANCE_DATA['total_balance'] - BALANCE_DATA['starting_balance']
+            BALANCE_DATA['lifetime_pnl_percent'] = (BALANCE_DATA['lifetime_pnl_usdt'] / BALANCE_DATA['starting_balance']) * 100
+
+            if tp_hit: # REQ 1: TP hit = REMOVE
+                PAPER_TRADES[symbol]['status'] = 'CLOSED_TP'
+                remove_from_watchlist = True
+                status_emoji = '✅'
+            else: # REQ 2: SL hit = NEXT ATTEMPT
+                PAPER_TRADES[symbol]['status'] = 'CLOSED_SL'
+                status_emoji = '❌'
+                if PAPER_TRADES[symbol].get('attempt', 1) >= 3:
+                    remove_from_watchlist = True
+
+            PAPER_TRADES[symbol]['pnl_percent'] = round(trade_pnl_percent, 2); PAPER_TRADES[symbol]['pnl_usdt'] = round(trade_pnl_usdt, 2)
+            if remove_from_watchlist: WATCHLIST.pop(symbol, None)
+
         save_balance_data(); save_paper_trades()
-        msg = f"{'✅' if hit_tp else '❌'} <b>PAPER TRADE CLOSED</b> {'✅' if hit_tp else '❌'}\n\n<b>Coin:</b> {symbol}\n<b>Entry:</b> ${trade['entry']:.6f}\n<b>Exit:</b> ${exit_price:.6f}\n<b>Trade Amount:</b> ${trade_amount:.2f} (10% of Balance)\n<b>Trade PnL:</b> {trade_pnl_percent:.2f}% / ${trade_pnl_usdt:.2f}\n<b>New Balance:</b> ${BALANCE_DATA['total_balance']:.2f}\n<b>Lifetime PnL:</b> {BALANCE_DATA['lifetime_pnl_percent']:.2f}% / ${BALANCE_DATA['lifetime_pnl_usdt']:.2f}"
+        if remove_from_watchlist: save_watchlist()
+
+        msg = f"{status_emoji} <b>PAPER TRADE CLOSED</b> {status_emoji}\n\n<b>Coin:</b> {symbol}\n<b>Entry:</b> ${trade['entry']:.6f}\n<b>Exit:</b> ${exit_price:.6f}\n<b>Attempt:</b> #{trade.get('attempt',1)}/3\n<b>Trade PnL:</b> {trade_pnl_percent:.2f}% / ${trade_pnl_usdt:.2f}\n<b>New Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
+        if remove_from_watchlist: msg += f"\n\n🗑️ <b>{symbol} removed from watchlist</b>"
         send_telegram(msg)
 
 async def bot1_scan():
-    global last_ticker_save
     print("Bot1: Started", flush=True)
     while True:
         try:
             url = "https://api.bybit.com/v5/market/tickers?category=linear"
             res = requests.get(url, timeout=20).json()
             added = 0
-            if res.get('retCode') == 0 and res.get('result') and 'list' in res.get('result', {}):
+            if res.get('retCode') == 0 and res.get('result'):
                 for t in res['result']['list']:
                     market = t.get('symbol', '')
                     if not market.endswith('USDT'): continue
                     symbol = market
-                    try: change_24h = float(t.get('price24hPcnt', 0)) * 100
+                    try: change_24h = float(t.get('price24hPcnt', 0)) * 100; volume_24h = float(t.get('volume24h', 0)); last_price = float(t.get('lastPrice', 0))
                     except: continue
-                    if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
-                        WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
-                        tv_symbol = f"BYBIT:{symbol}"; tv_link = f"https://www.tradingview.com/symbols/{tv_symbol}/"; bybit_link = f"https://www.bybit.com/trade/usdt/{symbol}"
-                        send_telegram(f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n\n📊 <a href='{tv_link}'>TradingView Chart Kholne</a>\n💱 <a href='{bybit_link}'>Bybit pe Trade Karne</a>")
-                        print(f"Bot1: {symbol} +{change_24h:.2f}% added", flush=True); added += 1
+                    if volume_24h < MIN_VOLUME_24H or last_price < 0.001 or '.P' in symbol: continue # FILTER
+                    async with _lock:
+                        if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
+                            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}; added += 1
+                    if added: send_telegram(f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n<b>Volume:</b> ${volume_24h:,.0f}")
             if added > 0: save_watchlist()
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(60)
@@ -277,33 +279,46 @@ async def bot1_scan():
 async def bot2_scan():
     print("Bot2: Started", flush=True)
     while True:
+        watchlist_changed = False
         try:
-            if not WATCHLIST: await asyncio.sleep(30); continue
-            for symbol in list(WATCHLIST.keys()):
-                try: df = get_klines(symbol)
-                except: await asyncio.sleep(5); continue
-                if df is None or len(df) < EMA_PERIOD + 2: continue
-                try: df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
-                except: continue
-                check_paper_trades(df, symbol)
+            async with _lock: symbols_to_scan = list(WATCHLIST.keys())
+            if not symbols_to_scan: await asyncio.sleep(30); continue
+
+            for symbol in symbols_to_scan:
+                df = get_klines(symbol)
+                if df is None: await asyncio.sleep(5); continue
+                if len(df) < EMA_PERIOD + 2: continue
+                df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
+                await check_paper_trades(df, symbol) # HAR BAR CHECK
+
                 st_line = df['st_line'].iloc[-1]; ema_val = df['ema_val'].iloc[-1]; close_price = df['close'].iloc[-1]
                 if any(math.isnan(v) for v in [st_line, ema_val, close_price]): continue
-                price_below_st = close_price < st_line; st_below_ema = st_line < ema_val; current_short = price_below_st and st_below_ema
-                reset_state = (close_price > st_line) and (st_line > ema_val); last_state = WATCHLIST[symbol].get('last_state', 'reset'); new_cross = (last_state == 'reset' and current_short)
-                if new_cross:
-                    cross_count = WATCHLIST[symbol].get('cross_count', 0)
-                    if cross_count < 3 and symbol not in PAPER_TRADES:
+
+                async with _lock:
+                    if symbol not in WATCHLIST: continue
+                    price_below_st = close_price < st_line; st_below_ema = st_line < ema_val; current_short = price_below_st and st_below_ema
+                    reset_state = (close_price > st_line) and (st_line > ema_val)
+                    last_state = WATCHLIST[symbol].get('last_state', 'reset'); new_cross = (last_state == 'reset' and current_short)
+
+                    open_trade = PAPER_TRADES.get(symbol)
+                    open_trade_exists = open_trade and open_trade.get('status') == 'OPEN'
+                    attempt = open_trade.get('attempt', 0) if open_trade else 0
+
+                    if new_cross and attempt < 3 and not open_trade_exists: # 3 ATTEMPT LOGIC
                         tp_price = round(close_price * 0.95, 6); sl_price = round(close_price * 1.02, 6)
-                        PAPER_TRADES[symbol] = {'entry': close_price, 'tp': tp_price, 'sl': sl_price, 'status': 'OPEN', 'time': time.time(), 'balance_at_entry': BALANCE_DATA['total_balance']}
-                        save_paper_trades()
+                        PAPER_TRADES[symbol] = {'entry': close_price, 'tp': tp_price, 'sl': sl_price, 'status': 'OPEN', 'time': time.time(), 'balance_at_entry': BALANCE_DATA['total_balance'], 'attempt': attempt + 1}
                         trade_amount = BALANCE_DATA['total_balance'] * RISK_PER_TRADE
-                        msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Signal:</b> #{cross_count + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>Trade Amount:</b> ${trade_amount:.2f} (10%)\n<b>TP 5%:</b> ${tp_price}\n<b>SL 2%:</b> ${sl_price}\n<b>Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
-                        send_telegram(msg); WATCHLIST[symbol]['cross_count'] = cross_count + 1
-                if current_short: WATCHLIST[symbol]['last_state'] = 'short'
-                elif reset_state: WATCHLIST[symbol]['last_state'] = 'reset'
-                if time.time() - WATCHLIST[symbol]['time'] > WATCHLIST_DAYS * 86400: WATCHLIST.pop(symbol, None)
+                        msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>Amount:</b> ${trade_amount:.2f} (10%)\n<b>TP:</b> ${tp_price} | <b>SL:</b> ${sl_price}"
+                        send_telegram(msg); watchlist_changed = True
+
+                    if current_short: WATCHLIST[symbol]['last_state'] = 'short'
+                    elif reset_state: WATCHLIST[symbol]['last_state'] = 'reset'
+
+                    has_open_trade = PAPER_TRADES.get(symbol, {}).get('status') == 'OPEN'
+                    if time.time() - WATCHLIST[symbol]['time'] > WATCHLIST_DAYS * 86400 and not has_open_trade:
+                        WATCHLIST.pop(symbol, None); watchlist_changed = True
                 await asyncio.sleep(1)
-            save_watchlist()
+            if watchlist_changed: save_watchlist()
         except Exception as e: print(f"Bot2 Error: {e}", flush=True)
         await asyncio.sleep(30)
 
@@ -312,37 +327,18 @@ async def bot2_scan():
 def home(): return jsonify({"status": "Bot Running"})
 
 async def main_async():
-    print("DEBUG: BOT_TOKEN =", "SET" if TELEGRAM_BOT_TOKEN else "MISSING", flush=True)
-    print("DEBUG: CHAT_ID =", "SET" if TELEGRAM_CHAT_ID else "MISSING", flush=True)
-    print("DEBUG: GIST_ID =", "SET" if GIST_ID else "MISSING", flush=True)
-    print("DEBUG: GITHUB_TOKEN =", "SET" if GITHUB_TOKEN else "MISSING", flush=True)
-
+    print("DEBUG: ALL KEYS SET", flush=True)
     load_watchlist(); load_paper_trades(); load_balance_data()
     telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    telegram_app.add_handler(CommandHandler("start", start_command))
-    telegram_app.add_handler(CommandHandler("add", add_command))
-    telegram_app.add_handler(CommandHandler("remove", remove_command))
-    telegram_app.add_handler(CommandHandler("watchlist", watchlist_command))
-    telegram_app.add_handler(CommandHandler("open", open_command))
-    telegram_app.add_handler(CommandHandler("close", close_command))
-    telegram_app.add_handler(CommandHandler("pnl", pnl_command))
+    for cmd, func in [("start", start_command), ("add", add_command), ("remove", remove_command), ("watchlist", watchlist_command), ("open", open_command), ("close", close_command), ("pnl", pnl_command)]:
+        telegram_app.add_handler(CommandHandler(cmd, func))
     await telegram_app.bot.delete_webhook(drop_pending_updates=True)
-
     port = int(os.environ.get("PORT", 10000))
     threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
-    asyncio.create_task(bot1_scan())
-    asyncio.create_task(bot2_scan())
-
-    # RENDER KE LIYE SAHI TARIKA
-    await telegram_app.initialize()
-    await telegram_app.start()
-    await telegram_app.updater.start_polling(drop_pending_updates=True)
-
+    asyncio.create_task(bot1_scan()); asyncio.create_task(bot2_scan())
+    await telegram_app.initialize(); await telegram_app.start(); await telegram_app.updater.start_polling(drop_pending_updates=True)
     print("Your service is live", flush=True)
-
-    # IDLE KI JAGAH INFINITE LOOP
-    while True:
-        await asyncio.sleep(3600)
+    while True: await asyncio.sleep(3600)
 
 def main():
     loop = asyncio.get_event_loop()
