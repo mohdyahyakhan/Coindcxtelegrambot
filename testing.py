@@ -23,7 +23,7 @@ ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
 RISK_PER_TRADE = 0.10
-MIN_VOLUME_24H = 2000000 # CHANGE 1: 5Lakh se 20Lakh kar diya. Spam kam hoga
+MIN_VOLUME_24H = 2000000 # 20 Lakh volume filter
 
 GIST_ID = os.environ.get("GIST_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
@@ -182,9 +182,7 @@ def get_klines(symbol, interval='5'):
     for i in range(3):
         df = get_klines_bybit(symbol, interval=interval)
         if df is not None: return df
-        print(f"Bybit attempt {i+1} failed for {symbol}", flush=True)
         time.sleep(2)
-    print(f"Bybit failed 3 times for {symbol}, trying CoinDCX", flush=True)
     return get_klines_coindcx(symbol, interval=f"{interval}m")
 
 def calculate_supertrend(df, period=10, multiplier=3):
@@ -264,13 +262,16 @@ async def bot1_scan():
                     market = t.get('symbol', '')
                     if not market.endswith('USDT'): continue
                     symbol = market
-                    try: change_24h = float(t.get('price24hPcnt', 0)) * 100; volume_24h = float(t.get('volume24h', 0)); last_price = float(t.get('lastPrice', 0))
+                    try: 
+                        # FIX: *100 HATA DIYA. Bybit decimal me deta hai 0.40 = 40%
+                        change_24h = float(t.get('price24hPcnt', 0)) * 100
+                        volume_24h = float(t.get('volume24h', 0)); last_price = float(t.get('lastPrice', 0))
                     except: continue
                     if volume_24h < MIN_VOLUME_24H or last_price < 0.001 or '.P' in symbol: continue
                     async with _lock:
                         if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
                             WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}; added += 1
-                    if added: send_telegram(f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n<b>Volume:</b> ${volume_24h:,.0f}")
+                            send_telegram(f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n<b>Volume:</b> ${volume_24h:,.0f}")
             if added > 0: save_watchlist()
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(60)
@@ -296,8 +297,6 @@ async def bot2_scan():
                 async with _lock:
                     if symbol not in WATCHLIST: continue
                     price_below_st = close_price < st_line; st_below_ema = st_line < ema_val; current_short = price_below_st and st_below_ema
-
-                    # CHANGE 2: YAHI BUG THA. EMA HATA DIYA RESET SE
                     reset_state = (close_price > st_line)
 
                     last_state = WATCHLIST[symbol].get('last_state', 'reset'); new_cross = (last_state == 'reset' and current_short)
