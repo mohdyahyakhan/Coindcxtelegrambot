@@ -22,7 +22,8 @@ WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
-RISK_PER_TRADE = 0.10
+RISK_PER_TRADE = 0.20  # Changed: 20% of Current Balance
+MAX_OPEN_TRADES = 4    # Added: Max 4 active trades at a time
 MIN_VOLUME_24H = 2000000
 
 GIST_ID = os.environ.get("GIST_ID")
@@ -131,11 +132,11 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not open_trades_list:
         await update.message.reply_text("📊 <b>No Open Trades</b>", parse_mode="HTML")
         return
-    msg = "📊 <b>OPEN TRADES</b>\n\n"
+    msg = f"📊 <b>OPEN TRADES ({len(open_trades_list)}/{MAX_OPEN_TRADES})</b>\n\n"
     for symbol, trade in open_trades_list.items():
         entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt',1)
         amount = trade['balance_at_entry'] * RISK_PER_TRADE
-        msg += f"<b>{symbol}</b> | SHORT | Attempt #{attempt}/3\nEntry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | SL: <code>${sl}</code>\nAmount: <code>${amount:.2f}</code>\n\n"
+        msg += f"<b>{symbol}</b> | SHORT | Attempt #{attempt}/3\nEntry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | SL: <code>${sl}</code>\nAmount: <code>${amount:.2f} (20%)</code>\n\n"
     msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -351,7 +352,11 @@ async def process_symbol(client, symbol):
         open_trade_exists = open_trade and open_trade.get('status') == 'OPEN'
         attempt = open_trade.get('attempt', 0) if open_trade else 0
 
-        if new_cross and attempt < 3 and not open_trade_exists:
+        # Count active open trades
+        active_open_trades = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
+
+        # Limit check: maximum 4 open trades allowed
+        if new_cross and attempt < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
             tp_price = round(close_price * 0.95, 6)
             sl_price = round(close_price * 1.02, 6)
             
@@ -361,7 +366,7 @@ async def process_symbol(client, symbol):
                 'balance_at_entry': BALANCE_DATA['total_balance'], 'attempt': attempt + 1
             }
             trade_amount = BALANCE_DATA['total_balance'] * RISK_PER_TRADE
-            msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>Amount:</b> ${trade_amount:.2f} (10%)\n<b>TP:</b> ${tp_price} | <b>SL:</b> ${sl_price}"
+            msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>Amount:</b> ${trade_amount:.2f} (20%)\n<b>TP:</b> ${tp_price} | <b>SL:</b> ${sl_price}"
             await send_telegram(client, msg)
             watchlist_changed = True
 
@@ -397,7 +402,6 @@ async def bot2_scan(client: httpx.AsyncClient):
 def home(): return jsonify({"status": "Bot Running", "watchlist_count": len(WATCHLIST)})
 
 async def main_async():
-    # Keep-Alive pool limits ke sath Client initialization
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
         print("DEBUG: ASYNC HTTP CLIENT INITIALIZED", flush=True)
@@ -406,7 +410,7 @@ async def main_async():
         await load_balance_data(client)
 
         telegram_app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-        telegram_app.bot_data["http_client"] = client  # Client passed to bot context
+        telegram_app.bot_data["http_client"] = client
         
         for cmd, func in [("start", start_command), ("add", add_command), ("remove", remove_command), 
                           ("watchlist", watchlist_command), ("open", open_command), 
