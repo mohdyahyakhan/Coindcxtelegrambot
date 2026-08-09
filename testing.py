@@ -22,9 +22,18 @@ WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
-RISK_PER_TRADE = 0.20  # Changed: 20% of Current Balance
-MAX_OPEN_TRADES = 4    # Added: Max 4 active trades at a time
+RISK_PER_TRADE = 0.20  # 20% of Current Balance
+MAX_OPEN_TRADES = 4    # Max 4 active trades
 MIN_VOLUME_24H = 2000000
+
+# Emergency SL & Target Limits
+EMERGENCY_SL_PERCENT = 0.045  # 4.5% Max Emergency Hard SL
+TARGET_TP_PERCENT = 0.070      # 7.0% TP Target
+
+# CoinDCX Futures Fee Structure (Taker 0.05% + 18% GST)
+TAKER_FEE = 0.0005       # 0.05% Taker Fee
+GST_RATE = 0.18          # 18% GST on Trading Fee
+EFFECTIVE_FEE_RATE = TAKER_FEE * (1 + GST_RATE)  # 0.059% (0.00059 per leg)
 
 GIST_ID = os.environ.get("GIST_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
@@ -135,8 +144,9 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📊 <b>OPEN TRADES ({len(open_trades_list)}/{MAX_OPEN_TRADES})</b>\n\n"
     for symbol, trade in open_trades_list.items():
         entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt',1)
-        amount = trade['balance_at_entry'] * RISK_PER_TRADE
-        msg += f"<b>{symbol}</b> | SHORT | Attempt #{attempt}/3\nEntry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | SL: <code>${sl}</code>\nAmount: <code>${amount:.2f} (20%)</code>\n\n"
+        # FIX 1: Fetch exact stored trade_amount_usdt or fallback safely
+        amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
+        msg += f"<b>{symbol}</b> | SHORT | Attempt #{attempt}/3\nEntry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | Max SL: <code>${sl}</code>\nAmount: <code>${amount:.2f} (20%)</code>\nExit Rule: Price > Supertrend\n\n"
     msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -257,40 +267,82 @@ async def check_paper_trades(client, df, symbol):
 
     candle_low = df['low'].iloc[-1]
     candle_high = df['high'].iloc[-1]
+    candle_close = df['close'].iloc[-1]
+    st_line = df['st_line'].iloc[-1]
+
     tp_hit = candle_low <= trade['tp']
     sl_hit = candle_high >= trade['sl']
+    st_exit = candle_close > st_line  # Dynamic Exit: Price crossed above Supertrend
 
-    if tp_hit or sl_hit:
-        exit_price = trade['tp'] if tp_hit else trade['sl']
+    if tp_hit or sl_hit or st_exit:
         remove_from_watchlist = False
+        if tp_hit:
+            exit_price = trade['tp']
+            status_code = 'CLOSED_TP'
+            status_emoji = '✅'
+            reason_txt = "Target TP Hit (7%)"
+            remove_from_watchlist = True
+        elif sl_hit:
+            exit_price = trade['sl']
+            status_code = 'CLOSED_SL'
+            status_emoji = '❌'
+            reason_txt = "Emergency Max SL Hit (4.5%)"
+        else:  # st_exit
+            exit_price = candle_close
+            status_code = 'CLOSED_ST_EXIT'
+            status_emoji = '🔄'
+            reason_txt = "Supertrend Reversal Exit"
+
         async with _lock:
-            trade_pnl_percent = ((trade['entry'] - exit_price) / trade['entry']) * 100
-            trade_amount = trade['balance_at_entry'] * RISK_PER_TRADE
-            trade_pnl_usdt = trade_amount * (trade_pnl_percent / 100)
+            # FIX 2: Priority to trade_amount_usdt for exact locked position size
+            trade_amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
             
-            BALANCE_DATA['total_balance'] += trade_pnl_usdt
+            # 1. Gross PnL
+            gross_pnl_percent = ((trade['entry'] - exit_price) / trade['entry']) * 100
+            gross_pnl_usdt = trade_amount * (gross_pnl_percent / 100)
+
+            # 2. CoinDCX Fee + 18% GST (Entry Leg + Exit Leg @ 0.059% each)
+            entry_value = trade_amount
+            exit_value = trade_amount + gross_pnl_usdt
+            entry_fee = entry_value * EFFECTIVE_FEE_RATE
+            exit_fee = max(0, exit_value) * EFFECTIVE_FEE_RATE
+            total_fees_usdt = entry_fee + exit_fee
+
+            # 3. Net PnL (Fees deducted)
+            net_pnl_usdt = gross_pnl_usdt - total_fees_usdt
+            net_pnl_percent = (net_pnl_usdt / trade_amount) * 100
+
+            # 4. Balance Update + Exact Snapshot Capture
+            BALANCE_DATA['total_balance'] += net_pnl_usdt
+            trade_snapshot_balance = BALANCE_DATA['total_balance']
+            
             BALANCE_DATA['lifetime_pnl_usdt'] = BALANCE_DATA['total_balance'] - BALANCE_DATA['starting_balance']
             BALANCE_DATA['lifetime_pnl_percent'] = (BALANCE_DATA['lifetime_pnl_usdt'] / BALANCE_DATA['starting_balance']) * 100
 
-            if tp_hit:
-                PAPER_TRADES[symbol]['status'] = 'CLOSED_TP'
+            PAPER_TRADES[symbol]['status'] = status_code
+            if status_code != 'CLOSED_TP' and PAPER_TRADES[symbol].get('attempt', 1) >= 3:
                 remove_from_watchlist = True
-                status_emoji = '✅'
-            else:
-                PAPER_TRADES[symbol]['status'] = 'CLOSED_SL'
-                status_emoji = '❌'
-                if PAPER_TRADES[symbol].get('attempt', 1) >= 3:
-                    remove_from_watchlist = True
 
-            PAPER_TRADES[symbol]['pnl_percent'] = round(trade_pnl_percent, 2)
-            PAPER_TRADES[symbol]['pnl_usdt'] = round(trade_pnl_usdt, 2)
+            PAPER_TRADES[symbol]['pnl_percent'] = round(net_pnl_percent, 2)
+            PAPER_TRADES[symbol]['pnl_usdt'] = round(net_pnl_usdt, 2)
             if remove_from_watchlist: WATCHLIST.pop(symbol, None)
 
         await save_balance_data(client)
         await save_paper_trades(client)
         if remove_from_watchlist: await save_watchlist(client)
 
-        msg = f"{status_emoji} <b>PAPER TRADE CLOSED</b> {status_emoji}\n\n<b>Coin:</b> {symbol}\n<b>Entry:</b> ${trade['entry']:.6f}\n<b>Exit:</b> ${exit_price:.6f}\n<b>Attempt:</b> #{trade.get('attempt',1)}/3\n<b>Trade PnL:</b> {trade_pnl_percent:.2f}% / ${trade_pnl_usdt:.2f}\n<b>New Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
+        msg = (
+            f"{status_emoji} <b>PAPER TRADE CLOSED</b> {status_emoji}\n\n"
+            f"<b>Coin:</b> {symbol}\n"
+            f"<b>Reason:</b> {reason_txt}\n"
+            f"<b>Entry:</b> ${trade['entry']:.6f}\n"
+            f"<b>Exit:</b> ${exit_price:.6f}\n"
+            f"<b>Attempt:</b> #{trade.get('attempt',1)}/3\n"
+            f"<b>Gross PnL:</b> ${gross_pnl_usdt:.2f}\n"
+            f"<b>Fees + GST (0.059% x2):</b> -${total_fees_usdt:.2f}\n"
+            f"<b>Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n"
+            f"<b>New Balance:</b> ${trade_snapshot_balance:.2f}"
+        )
         if remove_from_watchlist: msg += f"\n\n🗑️ <b>{symbol} removed from watchlist</b>"
         await send_telegram(client, msg)
 
@@ -352,21 +404,22 @@ async def process_symbol(client, symbol):
         open_trade_exists = open_trade and open_trade.get('status') == 'OPEN'
         attempt = open_trade.get('attempt', 0) if open_trade else 0
 
-        # Count active open trades
         active_open_trades = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
 
-        # Limit check: maximum 4 open trades allowed
         if new_cross and attempt < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
-            tp_price = round(close_price * 0.95, 6)
-            sl_price = round(close_price * 1.02, 6)
+            tp_price = round(close_price * (1 - TARGET_TP_PERCENT), 6)
+            sl_price = round(close_price * (1 + EMERGENCY_SL_PERCENT), 6)
+            trade_amount = BALANCE_DATA['total_balance'] * RISK_PER_TRADE
             
+            # FIX 2: Store trade_amount_usdt directly inside PAPER_TRADES dict
             PAPER_TRADES[symbol] = {
                 'entry': close_price, 'tp': tp_price, 'sl': sl_price, 
                 'status': 'OPEN', 'time': time.time(), 
-                'balance_at_entry': BALANCE_DATA['total_balance'], 'attempt': attempt + 1
+                'balance_at_entry': BALANCE_DATA['total_balance'],
+                'trade_amount_usdt': trade_amount,
+                'attempt': attempt + 1
             }
-            trade_amount = BALANCE_DATA['total_balance'] * RISK_PER_TRADE
-            msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>Amount:</b> ${trade_amount:.2f} (20%)\n<b>TP:</b> ${tp_price} | <b>SL:</b> ${sl_price}"
+            msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>Amount:</b> ${trade_amount:.2f} (20%)\n<b>TP:</b> ${tp_price} (7%)\n<b>Emergency SL:</b> ${sl_price} (4.5%)\n<b>Exit Rule:</b> Close on Supertrend Reversal"
             await send_telegram(client, msg)
             watchlist_changed = True
 
