@@ -23,18 +23,18 @@ WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
-RISK_PER_TRADE = 0.20 # 20% of Current Balance
-MAX_OPEN_TRADES = 4 # Max 4 active trades
+RISK_PER_TRADE = 0.20  # 20% of Current Balance
+MAX_OPEN_TRADES = 4    # Max 4 active trades
 MIN_VOLUME_24H = 2000000
 
 # Emergency SL & Target Limits
-EMERGENCY_SL_PERCENT = 0.045 # 4.5% Max Emergency Hard SL
-TARGET_TP_PERCENT = 0.070 # 7.0% TP Target
+EMERGENCY_SL_PERCENT = 0.045  # 4.5% Max Emergency Hard SL
+TARGET_TP_PERCENT = 0.070     # 7.0% TP Target
 
 # CoinDCX Futures Fee Structure (Taker 0.05% + 18% GST)
-TAKER_FEE = 0.0005 # 0.05% Taker Fee
-GST_RATE = 0.18 # 18% GST on Trading Fee
-EFFECTIVE_FEE_RATE = TAKER_FEE * (1 + GST_RATE) # 0.059% (0.00059 per leg)
+TAKER_FEE = 0.0005
+GST_RATE = 0.18
+EFFECTIVE_FEE_RATE = TAKER_FEE * (1 + GST_RATE)  # 0.059%
 
 GIST_ID = os.environ.get("GIST_ID")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
@@ -47,7 +47,12 @@ TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 _lock = asyncio.Lock()
 
-BALANCE_DATA = {"total_balance": 10000.0, "starting_balance": 10000.0, "lifetime_pnl_usdt": 0.0, "lifetime_pnl_percent": 0.0}
+BALANCE_DATA = {
+    "total_balance": 10000.0,
+    "starting_balance": 10000.0,
+    "lifetime_pnl_usdt": 0.0,
+    "lifetime_pnl_percent": 0.0
+}
 
 # ===== GIST HELPERS =====
 async def gist_get(client: httpx.AsyncClient, filename):
@@ -99,17 +104,27 @@ async def load_balance_data(client):
     if data and 'total_balance' in data:
         BALANCE_DATA = data
     else:
-        BALANCE_DATA = {"total_balance": 10000.0, "starting_balance": 10000.0, "lifetime_pnl_usdt": 0.0, "lifetime_pnl_percent": 0.0}
+        BALANCE_DATA = {
+            "total_balance": 10000.0,
+            "starting_balance": 10000.0,
+            "lifetime_pnl_usdt": 0.0,
+            "lifetime_pnl_percent": 0.0
+        }
         await save_balance_data(client)
 
+# ===== TELEGRAM ALERT HELPER (3x RETRY) =====
 async def send_telegram(client: httpx.AsyncClient, message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "HTML"}
-    try:
-        await client.post(url, json=payload, timeout=10.0)
-    except Exception as e:
-        print(f"Telegram Send Error: {e}", flush=True)
+    for attempt in range(3):
+        try:
+            r = await client.post(url, json=payload, timeout=10.0)
+            if r.status_code == 200: return
+        except Exception as e:
+            print(f"Telegram Send Retry {attempt+1} Error: {e}", flush=True)
+            await asyncio.sleep(2)
+    print(f"CRITICAL: Telegram failed after 3 retries: {message[:50]}", flush=True)
 
 # ===== TELEGRAM COMMANDS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -120,8 +135,9 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbol = context.args[0].upper()
         async with _lock:
             WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
-            client = context.bot_data.get("http_client")
-            if client: await save_watchlist(client)
+        
+        client = context.bot_data.get("http_client")
+        if client: await save_watchlist(client)
         await update.message.reply_text(f"✅ {symbol} added to watchlist")
 
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -129,8 +145,9 @@ async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         symbol = context.args[0].upper()
         async with _lock:
             WATCHLIST.pop(symbol, None)
-            client = context.bot_data.get("http_client")
-            if client: await save_watchlist(client)
+        
+        client = context.bot_data.get("http_client")
+        if client: await save_watchlist(client)
         await update.message.reply_text(f"🗑️ {symbol} removed")
 
 async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,13 +155,13 @@ async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📋 Watchlist ({len(WATCHLIST)}): {coins}")
 
 async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    open_trades_list = {k:v for k,v in PAPER_TRADES.items() if v.get('status') == 'OPEN'}
+    open_trades_list = {k: v for k, v in PAPER_TRADES.items() if v.get('status') == 'OPEN'}
     if not open_trades_list:
         await update.message.reply_text("📊 <b>No Open Trades</b>", parse_mode="HTML")
         return
     msg = f"📊 <b>OPEN TRADES ({len(open_trades_list)}/{MAX_OPEN_TRADES})</b>\n\n"
     for symbol, trade in open_trades_list.items():
-        entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt',1)
+        entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt', 1)
         amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
         msg += f"<b>{symbol}</b> | SHORT | Attempt #{attempt}/3\nEntry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | Max SL: <code>${sl}</code>\nAmount: <code>${amount:.2f} (20%)</code>\nExit Rule: Price > Supertrend\n\n"
     msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
@@ -155,20 +172,17 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     symbol = context.args[0].upper()
     client = context.bot_data.get("http_client")
 
-    # 1. Pehle Lock ke andar check karein ki trade open hai ya nahi
     async with _lock:
         if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status'] != 'OPEN':
             return await update.message.reply_text(f"{symbol} me koi open trade nahi hai")
         trade = PAPER_TRADES[symbol].copy()
 
-    # 2. Lock ke BAHAR market price fetch karein (Bot block hone se bachega)
     df = await get_klines(client, symbol)
     if df is None:
         return await update.message.reply_text(f"❌ {symbol} ka current price fetch nahi hua. Baad me try karein.")
 
     exit_price = df['close'].iloc[-1]
 
-    # 3. Lock ke andar PnL, Balance aur States update karein
     async with _lock:
         if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status'] != 'OPEN':
             return await update.message.reply_text(f"⚠️ {symbol} trade background scan me pehle hi close ho chuka hai.")
@@ -214,7 +228,13 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = BALANCE_DATA
-    await update.message.reply_text(f"📊 <b>ACCOUNT SUMMARY</b>\n\n<b>Starting Balance:</b> ${bal['starting_balance']:.2f}\n<b>Current Balance:</b> ${bal['total_balance']:.2f}\n<b>Lifetime PnL:</b> {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}", parse_mode="HTML")
+    await update.message.reply_text(
+        f"📊 <b>ACCOUNT SUMMARY</b>\n\n"
+        f"<b>Starting Balance:</b> ${bal['starting_balance']:.2f}\n"
+        f"<b>Current Balance:</b> ${bal['total_balance']:.2f}\n"
+        f"<b>Lifetime PnL:</b> {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}",
+        parse_mode="HTML"
+    )
 
 # ===== MARKET DATA =====
 async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='5', limit=351):
@@ -243,7 +263,7 @@ async def get_klines_coindcx_async(client: httpx.AsyncClient, symbol, interval='
         if not data or not isinstance(data, list): return None
         df = pd.DataFrame(data).rename(columns={'time': 'timestamp'})
         df['timestamp'] = df['timestamp'].astype('int64')
-        df[['open','high','low','close']] = df[['open','high','low','close']].astype(float)
+        df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].astype(float)
         df = df[['timestamp', 'open', 'high', 'low', 'close']].sort_values('timestamp').reset_index(drop=True).iloc[:-1].reset_index(drop=True)
         if len(df) < EMA_PERIOD + 50: return None
         return df
@@ -373,7 +393,7 @@ async def check_paper_trades(client, df, symbol):
             f"<b>Gross PnL:</b> ${gross_pnl_usdt:.2f}\n<b>Fees + GST (0.059% x2):</b> -${total_fees_usdt:.2f}\n<b>Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n<b>New Balance:</b> ${trade_snapshot_balance:.2f}"
         )
         if remove_from_watchlist: msg += f"\n\n🗑️ <b>{symbol} removed from watchlist</b>"
-        await send_telegram(client, msg)
+        asyncio.create_task(send_telegram(client, msg))
 
 async def bot1_scan(client: httpx.AsyncClient):
     print("Bot1: Started", flush=True)
@@ -400,7 +420,7 @@ async def bot1_scan(client: httpx.AsyncClient):
                         if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
                             WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
                             added += 1
-                            await send_telegram(client, f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n<b>Volume:</b> ${volume_24h:,.0f}")
+                            asyncio.create_task(send_telegram(client, f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n<b>Volume:</b> ${volume_24h:,.0f}"))
             if added > 0: await save_watchlist(client)
         except Exception as e:
             print(f"Bot1 Error: {e}", flush=True)
@@ -419,6 +439,10 @@ async def process_symbol(client, symbol):
     if any(math.isnan(v) for v in [st_line, ema_val, close_price]): return False
 
     watchlist_changed = False
+    msg_to_send = None
+    new_entry = False
+
+    # 1. Fast Memory Update inside Lock
     async with _lock:
         if symbol not in WATCHLIST: return False
         price_below_st = close_price < st_line
@@ -432,7 +456,6 @@ async def process_symbol(client, symbol):
         open_trade = PAPER_TRADES.get(symbol)
         open_trade_exists = open_trade and open_trade.get('status') == 'OPEN'
         attempt = open_trade.get('attempt', 0) if open_trade else 0
-
         active_open_trades = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
 
         if new_cross and attempt < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
@@ -447,8 +470,9 @@ async def process_symbol(client, symbol):
                 'trade_amount_usdt': trade_amount,
                 'attempt': attempt + 1
             }
-            msg = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>Amount:</b> ${trade_amount:.2f} (20%)\n<b>TP:</b> ${tp_price} (7%)\n<b>Emergency SL:</b> ${sl_price} (4.5%)\n<b>Exit Rule:</b> Close on Supertrend Reversal"
-            await send_telegram(client, msg)
+
+            msg_to_send = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>Amount:</b> ${trade_amount:.2f} (20%)\n<b>TP:</b> ${tp_price} (7%)\n<b>Emergency SL:</b> ${sl_price} (4.5%)\n<b>Exit Rule:</b> Close on Supertrend Reversal"
+            new_entry = True
             watchlist_changed = True
 
         if current_short: WATCHLIST[symbol]['last_state'] = 'short'
@@ -458,6 +482,12 @@ async def process_symbol(client, symbol):
         if time.time() - WATCHLIST[symbol]['time'] > WATCHLIST_DAYS * 86400 and not has_open_trade:
             WATCHLIST.pop(symbol, None)
             watchlist_changed = True
+
+    # 2. Network Operations outside Lock
+    if new_entry:
+        await save_paper_trades(client)
+        print(f"ENTRY CREATED & SAVED: {symbol} @ {close_price}", flush=True)
+        asyncio.create_task(send_telegram(client, msg_to_send))
 
     return watchlist_changed
 
