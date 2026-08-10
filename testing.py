@@ -22,14 +22,18 @@ PUMP_PERCENT_24H = 40
 WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
-EMA_PERIOD = 300
-RISK_PER_TRADE = 0.20  # 20% of Current Balance
-MAX_OPEN_TRADES = 4    # Max 4 active trades
+EMA_PERIOD = 200        # Optimized EMA period
+RSI_PERIOD = 14
+RSI_ENTRY_THRESHOLD = 70.0 # RSI Overbought Filter (>70)
+RISK_PER_TRADE = 0.20   # 20% of Current Balance
+MAX_OPEN_TRADES = 2     # Max 2 active trades
 MIN_VOLUME_24H = 2000000
+SL_COOLDOWN_HOURS = 4   # 4 Hours Cooldown after SL hit
 
-# Emergency SL & Target Limits
-EMERGENCY_SL_PERCENT = 0.045  # 4.5% Max Emergency Hard SL
-TARGET_TP_PERCENT = 0.070     # 7.0% TP Target
+# Updated R:R Ratio (1 : 3.43) & Trailing Break-Even
+EMERGENCY_SL_PERCENT = 0.035      # 3.5% Max Emergency Hard SL
+TARGET_TP_PERCENT = 0.120         # 12.0% TP Target
+BREAKEVEN_TRIGGER_PERCENT = 0.030 # Shift SL to Entry at +3% profit
 
 # CoinDCX Futures Fee Structure (Taker 0.05% + 18% GST)
 TAKER_FEE = 0.0005
@@ -90,6 +94,7 @@ async def load_watchlist(client):
                 WATCHLIST[symbol] = details
                 WATCHLIST[symbol].setdefault('last_state', 'reset')
                 WATCHLIST[symbol].setdefault('cross_count', 0)
+                WATCHLIST[symbol].setdefault('cooldown_until', 0)
     print(f"Gist Loaded: {len(WATCHLIST)} coins", flush=True)
 
 async def save_paper_trades(client): await gist_set(client, 'paper_trades.json', PAPER_TRADES)
@@ -112,7 +117,7 @@ async def load_balance_data(client):
         }
         await save_balance_data(client)
 
-# ===== TELEGRAM ALERT HELPER (3x RETRY) =====
+# ===== TELEGRAM ALERT HELPER =====
 async def send_telegram(client: httpx.AsyncClient, message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -128,13 +133,13 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMANDS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is Online\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/open\n/close SYMBOL\n/pnl")
+    await update.message.reply_text("✅ Bot is Online (15m Strategy & Risk Management active)\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/open\n/close SYMBOL\n/pnl")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
         async with _lock:
-            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
+            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset', 'cooldown_until': 0}
         
         client = context.bot_data.get("http_client")
         if client: await save_watchlist(client)
@@ -162,8 +167,9 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📊 <b>OPEN TRADES ({len(open_trades_list)}/{MAX_OPEN_TRADES})</b>\n\n"
     for symbol, trade in open_trades_list.items():
         entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt', 1)
+        is_be = "🛡️ (BREAK-EVEN)" if trade.get('is_breakeven') else ""
         amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
-        msg += f"<b>{symbol}</b> | SHORT | Attempt #{attempt}/3\nEntry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | Max SL: <code>${sl}</code>\nAmount: <code>${amount:.2f} (20%)</code>\nExit Rule: Price > Supertrend\n\n"
+        msg += f"<b>{symbol}</b> | SHORT | Attempt #{attempt}/3\nEntry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | Max SL: <code>${sl}</code> {is_be}\nAmount: <code>${amount:.2f} (20%)</code>\nExit Rule: Price > Supertrend\n\n"
     msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -236,8 +242,8 @@ async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-# ===== MARKET DATA =====
-async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='5', limit=351):
+# ===== MARKET DATA & INDICATORS =====
+async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='15', limit=351):
     url = "https://api.bybit.com/v5/market/kline"
     params = {'category': 'linear', 'symbol': symbol, 'interval': interval, 'limit': limit}
     try:
@@ -252,7 +258,7 @@ async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='5'
     except: pass
     return None
 
-async def get_klines_coindcx_async(client: httpx.AsyncClient, symbol, interval='5m', limit=351):
+async def get_klines_coindcx_async(client: httpx.AsyncClient, symbol, interval='15m', limit=351):
     base = symbol.replace('USDT', '')
     pair = f"F-{base}_USDT"
     url = "https://api.coindcx.com/exchange/v1/candles"
@@ -274,6 +280,14 @@ async def get_klines(client, symbol):
     df = await get_klines_bybit_async(client, symbol)
     if df is not None: return df
     return await get_klines_coindcx_async(client, symbol)
+
+def calculate_rsi(df, period=14):
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
+    rs = gain / loss
+    rsi = 100 - (100 / (1 + rs))
+    return rsi
 
 def calculate_supertrend(df, period=10, multiplier=3):
     df = df.copy()
@@ -326,7 +340,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
     return df
 
-# ===== STRATEGY EXECUTION =====
+# ===== STRATEGY EXECUTION & RISK CONTROL =====
 async def check_paper_trades(client, df, symbol):
     global BALANCE_DATA
     async with _lock:
@@ -338,6 +352,18 @@ async def check_paper_trades(client, df, symbol):
     candle_close = df['close'].iloc[-1]
     st_line = df['st_line'].iloc[-1]
 
+    # --- Break-Even Check (+3% Profit) ---
+    max_favorable_profit_pct = (trade['entry'] - candle_low) / trade['entry']
+    if max_favorable_profit_pct >= BREAKEVEN_TRIGGER_PERCENT and trade['sl'] > trade['entry']:
+        async with _lock:
+            if symbol in PAPER_TRADES and PAPER_TRADES[symbol]['status'] == 'OPEN':
+                PAPER_TRADES[symbol]['sl'] = trade['entry']
+                PAPER_TRADES[symbol]['is_breakeven'] = True
+                trade['sl'] = trade['entry']
+                trade['is_breakeven'] = True
+        await save_paper_trades(client)
+        asyncio.create_task(send_telegram(client, f"🛡️ <b>BREAK-EVEN ACTIVATED</b> 🛡️\n\n<b>Coin:</b> {symbol}\nTrade is up +3%! Max SL shifted to Entry Price (${trade['entry']:.6f}). Trade is now 100% RISK-FREE!"))
+
     tp_hit = candle_low <= trade['tp']
     sl_hit = candle_high >= trade['sl']
     st_exit = candle_close > st_line
@@ -345,9 +371,10 @@ async def check_paper_trades(client, df, symbol):
     if tp_hit or sl_hit or st_exit:
         remove_from_watchlist = False
         if tp_hit:
-            exit_price = trade['tp']; status_code = 'CLOSED_TP'; status_emoji = '✅'; reason_txt = "Target TP Hit (7%)"; remove_from_watchlist = True
+            exit_price = trade['tp']; status_code = 'CLOSED_TP'; status_emoji = '✅'; reason_txt = f"Target TP Hit ({TARGET_TP_PERCENT*100:.1f}%)"; remove_from_watchlist = True
         elif sl_hit:
-            exit_price = trade['sl']; status_code = 'CLOSED_SL'; status_emoji = '❌'; reason_txt = "Emergency Max SL Hit (4.5%)"
+            exit_price = trade['sl']; status_code = 'CLOSED_SL'; status_emoji = '❌'
+            reason_txt = "Break-Even SL Hit (0%)" if trade.get('is_breakeven') else f"Emergency Max SL Hit ({EMERGENCY_SL_PERCENT*100:.1f}%)"
         else:
             exit_price = candle_close; status_code = 'CLOSED_ST_EXIT'; status_emoji = '🔄'; reason_txt = "Supertrend Reversal Exit"
 
@@ -376,6 +403,12 @@ async def check_paper_trades(client, df, symbol):
             BALANCE_DATA['lifetime_pnl_percent'] = (BALANCE_DATA['lifetime_pnl_usdt'] / BALANCE_DATA['starting_balance']) * 100
 
             PAPER_TRADES[symbol]['status'] = status_code
+
+            # Apply 4-Hour Cooldown on Hard SL Hit
+            if status_code == 'CLOSED_SL' and not trade.get('is_breakeven'):
+                if symbol in WATCHLIST:
+                    WATCHLIST[symbol]['cooldown_until'] = time.time() + (SL_COOLDOWN_HOURS * 3600)
+
             if status_code != 'CLOSED_TP' and PAPER_TRADES[symbol].get('attempt', 1) >= 3:
                 remove_from_watchlist = True
 
@@ -385,13 +418,15 @@ async def check_paper_trades(client, df, symbol):
 
         await save_balance_data(client)
         await save_paper_trades(client)
-        if remove_from_watchlist: await save_watchlist(client)
+        await save_watchlist(client)
 
         msg = (
             f"{status_emoji} <b>PAPER TRADE CLOSED</b> {status_emoji}\n\n"
             f"<b>Coin:</b> {symbol}\n<b>Reason:</b> {reason_txt}\n<b>Entry:</b> ${trade['entry']:.6f}\n<b>Exit:</b> ${exit_price:.6f}\n<b>Attempt:</b> #{trade.get('attempt',1)}/3\n"
-            f"<b>Gross PnL:</b> ${gross_pnl_usdt:.2f}\n<b>Fees + GST (0.059% x2):</b> -${total_fees_usdt:.2f}\n<b>Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n<b>New Balance:</b> ${trade_snapshot_balance:.2f}"
+            f"<b>Gross PnL:</b> ${gross_pnl_usdt:.2f}\n<b>Fees + GST:</b> -${total_fees_usdt:.2f}\n<b>Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n<b>New Balance:</b> ${trade_snapshot_balance:.2f}"
         )
+        if status_code == 'CLOSED_SL' and not trade.get('is_breakeven'):
+            msg += f"\n\n⏳ <b>4-Hour Cooldown applied to {symbol} due to SL</b>"
         if remove_from_watchlist: msg += f"\n\n🗑️ <b>{symbol} removed from watchlist</b>"
         asyncio.create_task(send_telegram(client, msg))
 
@@ -417,8 +452,9 @@ async def bot1_scan(client: httpx.AsyncClient):
                     if volume_24h < MIN_VOLUME_24H or last_price < 0.001 or '.P' in symbol: continue
 
                     async with _lock:
-                        if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
-                            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
+                        cooldown_until = WATCHLIST.get(symbol, {}).get('cooldown_until', 0)
+                        if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST and time.time() > cooldown_until:
+                            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset', 'cooldown_until': 0}
                             added += 1
                             asyncio.create_task(send_telegram(client, f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n<b>Volume:</b> ${volume_24h:,.0f}"))
             if added > 0: await save_watchlist(client)
@@ -431,12 +467,18 @@ async def process_symbol(client, symbol):
     if df is None or len(df) < EMA_PERIOD + 2: return False
 
     df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
+    df['rsi'] = calculate_rsi(df, RSI_PERIOD)
+
     await check_paper_trades(client, df, symbol)
 
     st_line = df['st_line'].iloc[-1]
     ema_val = df['ema_val'].iloc[-1]
     close_price = df['close'].iloc[-1]
-    if any(math.isnan(v) for v in [st_line, ema_val, close_price]): return False
+    rsi_val = df['rsi'].iloc[-1]
+    
+    # Safe NaN Check for RSI and Other Indicators
+    if pd.isna(rsi_val) or any(math.isnan(v) for v in [st_line, ema_val, close_price]): 
+        return False
 
     watchlist_changed = False
     msg_to_send = None
@@ -445,6 +487,12 @@ async def process_symbol(client, symbol):
     # 1. Fast Memory Update inside Lock
     async with _lock:
         if symbol not in WATCHLIST: return False
+
+        # Cooldown check
+        cooldown_until = WATCHLIST[symbol].get('cooldown_until', 0)
+        if time.time() < cooldown_until:
+            return False
+
         price_below_st = close_price < st_line
         st_below_ema = st_line < ema_val
         current_short = price_below_st and st_below_ema
@@ -458,7 +506,10 @@ async def process_symbol(client, symbol):
         attempt = open_trade.get('attempt', 0) if open_trade else 0
         active_open_trades = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
 
-        if new_cross and attempt < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
+        # RSI Overbought Check (RSI >= 70)
+        rsi_overbought = rsi_val >= RSI_ENTRY_THRESHOLD
+
+        if new_cross and rsi_overbought and attempt < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
             tp_price = round(close_price * (1 - TARGET_TP_PERCENT), 6)
             sl_price = round(close_price * (1 + EMERGENCY_SL_PERCENT), 6)
             trade_amount = BALANCE_DATA['total_balance'] * RISK_PER_TRADE
@@ -468,10 +519,19 @@ async def process_symbol(client, symbol):
                 'status': 'OPEN', 'time': time.time(),
                 'balance_at_entry': BALANCE_DATA['total_balance'],
                 'trade_amount_usdt': trade_amount,
-                'attempt': attempt + 1
+                'attempt': attempt + 1,
+                'is_breakeven': False
             }
 
-            msg_to_send = f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n<b>Entry:</b> ${close_price:.6f}\n<b>Amount:</b> ${trade_amount:.2f} (20%)\n<b>TP:</b> ${tp_price} (7%)\n<b>Emergency SL:</b> ${sl_price} (4.5%)\n<b>Exit Rule:</b> Close on Supertrend Reversal"
+            msg_to_send = (
+                f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n"
+                f"<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n"
+                f"<b>Entry:</b> ${close_price:.6f}\n<b>RSI:</b> {rsi_val:.1f} (Overbought >= 70)\n"
+                f"<b>Amount:</b> ${trade_amount:.2f} (20%)\n<b>TP:</b> ${tp_price} ({TARGET_TP_PERCENT*100:.1f}%)\n"
+                f"<b>Max SL:</b> ${sl_price} ({EMERGENCY_SL_PERCENT*100:.1f}%)\n"
+                f"<b>BE Protection:</b> Auto SL to Entry at +3% profit\n"
+                f"<b>Exit Rule:</b> Close on Supertrend Reversal"
+            )
             new_entry = True
             watchlist_changed = True
 
