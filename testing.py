@@ -22,14 +22,14 @@ PUMP_PERCENT_24H = 40
 WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
-EMA_PERIOD = 200        # Optimized EMA period
+EMA_PERIOD = 300        # Updated EMA period to 300
 RISK_PER_TRADE = 0.20   # 20% of Current Balance
-MAX_OPEN_TRADES = 2     # Max 2 active trades
+MAX_OPEN_TRADES = 4     # Max 4 active trades
 MIN_VOLUME_24H = 2000000
 
-# Updated R:R Ratio (1 : 3.43) & Trailing Break-Even
-EMERGENCY_SL_PERCENT = 0.035      # 3.5% Max Emergency Hard SL
-TARGET_TP_PERCENT = 0.120         # 12.0% TP Target
+# Updated SL & TP Settings
+EMERGENCY_SL_PERCENT = 0.020      # Updated to 2.0% Max Emergency Hard SL
+TARGET_TP_PERCENT = 0.050         # Updated to 5.0% TP Target
 BREAKEVEN_TRIGGER_PERCENT = 0.030 # Shift SL to Entry at +3% profit
 
 # CoinDCX Futures Fee Structure (Taker 0.05% + 18% GST)
@@ -133,7 +133,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMANDS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is Online (15m Supertrend + EMA Strategy Active)\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/open\n/close SYMBOL\n/pnl")
+    await update.message.reply_text("✅ Bot is Online (5m Supertrend + 300 EMA Strategy Active)\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/open\n/close SYMBOL\n/pnl")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -243,7 +243,7 @@ async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ===== MARKET DATA & INDICATORS =====
-async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='15', limit=351):
+async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='5', limit=400):
     url = "https://api.bybit.com/v5/market/kline"
     params = {'category': 'linear', 'symbol': symbol, 'interval': interval, 'limit': limit}
     try:
@@ -258,7 +258,7 @@ async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='15
     except: pass
     return None
 
-async def get_klines_coindcx_async(client: httpx.AsyncClient, symbol, interval='15m', limit=351):
+async def get_klines_coindcx_async(client: httpx.AsyncClient, symbol, interval='5m', limit=400):
     base = symbol.replace('USDT', '')
     pair = f"F-{base}_USDT"
     url = "https://api.coindcx.com/exchange/v1/candles"
