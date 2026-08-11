@@ -26,7 +26,6 @@ EMA_PERIOD = 200        # Optimized EMA period
 RISK_PER_TRADE = 0.20   # 20% of Current Balance
 MAX_OPEN_TRADES = 2     # Max 2 active trades
 MIN_VOLUME_24H = 2000000
-SL_COOLDOWN_HOURS = 4   # 4 Hours Cooldown after SL hit
 
 # Updated R:R Ratio (1 : 3.43) & Trailing Break-Even
 EMERGENCY_SL_PERCENT = 0.035      # 3.5% Max Emergency Hard SL
@@ -96,7 +95,6 @@ async def load_watchlist(client):
                 WATCHLIST[symbol] = details
                 WATCHLIST[symbol].setdefault('last_state', 'reset')
                 WATCHLIST[symbol].setdefault('cross_count', 0)
-                WATCHLIST[symbol].setdefault('cooldown_until', 0)
     print(f"Gist Loaded: {len(WATCHLIST)} coins", flush=True)
 
 async def save_paper_trades(client): await gist_set(client, 'paper_trades.json', PAPER_TRADES)
@@ -141,7 +139,7 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
         symbol = context.args[0].upper()
         async with _lock:
-            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset', 'cooldown_until': 0}
+            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
         
         client = context.bot_data.get("http_client")
         if client: await save_watchlist(client)
@@ -398,11 +396,6 @@ async def check_paper_trades(client, df, symbol):
 
             PAPER_TRADES[symbol]['status'] = status_code
 
-            # Apply 4-Hour Cooldown on Hard SL Hit
-            if status_code == 'CLOSED_SL' and not trade.get('is_breakeven'):
-                if symbol in WATCHLIST:
-                    WATCHLIST[symbol]['cooldown_until'] = time.time() + (SL_COOLDOWN_HOURS * 3600)
-
             if status_code != 'CLOSED_TP' and PAPER_TRADES[symbol].get('attempt', 1) >= 3:
                 remove_from_watchlist = True
 
@@ -419,8 +412,6 @@ async def check_paper_trades(client, df, symbol):
             f"<b>Coin:</b> {symbol}\n<b>Reason:</b> {reason_txt}\n<b>Entry:</b> ${trade['entry']:.6f}\n<b>Exit:</b> ${exit_price:.6f}\n<b>Attempt:</b> #{trade.get('attempt',1)}/3\n"
             f"<b>Gross PnL:</b> ${gross_pnl_usdt:.2f}\n<b>Fees + GST:</b> -${total_fees_usdt:.2f}\n<b>Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n<b>New Balance:</b> ${trade_snapshot_balance:.2f}"
         )
-        if status_code == 'CLOSED_SL' and not trade.get('is_breakeven'):
-            msg += f"\n\n⏳ <b>4-Hour Cooldown applied to {symbol} due to SL</b>"
         if remove_from_watchlist: msg += f"\n\n🗑️ <b>{symbol} removed from watchlist</b>"
         asyncio.create_task(send_telegram(client, msg))
 
@@ -446,9 +437,8 @@ async def bot1_scan(client: httpx.AsyncClient):
                     if volume_24h < MIN_VOLUME_24H or last_price < 0.001 or '.P' in symbol: continue
 
                     async with _lock:
-                        cooldown_until = WATCHLIST.get(symbol, {}).get('cooldown_until', 0)
-                        if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST and time.time() > cooldown_until:
-                            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset', 'cooldown_until': 0}
+                        if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
+                            WATCHLIST[symbol] = {'time': time.time(), 'cross_count': 0, 'last_state': 'reset'}
                             added += 1
                             asyncio.create_task(send_telegram(client, f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n<b>Volume:</b> ${volume_24h:,.0f}"))
             if added > 0: await save_watchlist(client)
@@ -479,11 +469,6 @@ async def process_symbol(client, symbol):
     # 1. Fast Memory Update inside Lock
     async with _lock:
         if symbol not in WATCHLIST: return False
-
-        # Cooldown check
-        cooldown_until = WATCHLIST[symbol].get('cooldown_until', 0)
-        if time.time() < cooldown_until:
-            return False
 
         price_below_st = close_price < st_line
         st_below_ema = st_line < ema_val
