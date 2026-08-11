@@ -23,8 +23,6 @@ WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 200        # Optimized EMA period
-RSI_PERIOD = 14
-RSI_ENTRY_THRESHOLD = 70.0 # RSI Overbought Filter (>70)
 RISK_PER_TRADE = 0.20   # 20% of Current Balance
 MAX_OPEN_TRADES = 2     # Max 2 active trades
 MIN_VOLUME_24H = 2000000
@@ -137,7 +135,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMANDS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is Online (15m Strategy & Risk Management active)\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/open\n/close SYMBOL\n/pnl")
+    await update.message.reply_text("✅ Bot is Online (15m Supertrend + EMA Strategy Active)\nCommands:\n/add SYMBOL\n/remove SYMBOL\n/watchlist\n/open\n/close SYMBOL\n/pnl")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -284,14 +282,6 @@ async def get_klines(client, symbol):
     df = await get_klines_bybit_async(client, symbol)
     if df is not None: return df
     return await get_klines_coindcx_async(client, symbol)
-
-def calculate_rsi(df, period=14):
-    delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).ewm(alpha=1/period, adjust=False).mean()
-    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/period, adjust=False).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs))
-    return rsi
 
 def calculate_supertrend(df, period=10, multiplier=3):
     df = df.copy()
@@ -471,17 +461,15 @@ async def process_symbol(client, symbol):
     if df is None or len(df) < EMA_PERIOD + 2: return False
 
     df = calculate_supertrend(df, ATR_PERIOD, ATR_MULTIPLIER)
-    df['rsi'] = calculate_rsi(df, RSI_PERIOD)
 
     await check_paper_trades(client, df, symbol)
 
     st_line = df['st_line'].iloc[-1]
     ema_val = df['ema_val'].iloc[-1]
     close_price = df['close'].iloc[-1]
-    rsi_val = df['rsi'].iloc[-1]
     
-    # Safe NaN Check for RSI and Other Indicators
-    if pd.isna(rsi_val) or any(math.isnan(v) for v in [st_line, ema_val, close_price]): 
+    # Safe NaN Check for Indicators
+    if any(math.isnan(v) for v in [st_line, ema_val, close_price]): 
         return False
 
     watchlist_changed = False
@@ -510,10 +498,7 @@ async def process_symbol(client, symbol):
         attempt = open_trade.get('attempt', 0) if open_trade else 0
         active_open_trades = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
 
-        # RSI Overbought Check (RSI >= 70)
-        rsi_overbought = rsi_val >= RSI_ENTRY_THRESHOLD
-
-        if new_cross and rsi_overbought and attempt < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
+        if new_cross and attempt < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
             tp_price = round(close_price * (1 - TARGET_TP_PERCENT), 6)
             sl_price = round(close_price * (1 + EMERGENCY_SL_PERCENT), 6)
             trade_amount = BALANCE_DATA['total_balance'] * RISK_PER_TRADE
@@ -530,7 +515,7 @@ async def process_symbol(client, symbol):
             msg_to_send = (
                 f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n"
                 f"<b>Coin:</b> {symbol}\n<b>Attempt:</b> #{attempt + 1}/3\n"
-                f"<b>Entry:</b> ${close_price:.6f}\n<b>RSI:</b> {rsi_val:.1f} (Overbought >= 70)\n"
+                f"<b>Entry:</b> ${close_price:.6f}\n"
                 f"<b>Amount:</b> ${trade_amount:.2f} (20%)\n<b>TP:</b> ${tp_price} ({TARGET_TP_PERCENT*100:.1f}%)\n"
                 f"<b>Max SL:</b> ${sl_price} ({EMERGENCY_SL_PERCENT*100:.1f}%)\n"
                 f"<b>BE Protection:</b> Auto SL to Entry at +3% profit\n"
