@@ -75,13 +75,17 @@ async def gist_get(client: httpx.AsyncClient, filename):
 
 async def gist_set(client: httpx.AsyncClient, filename, content):
     if not GIST_URL or not GITHUB_TOKEN: return False
-    try:
-        payload = {"files": {filename: {"content": json.dumps(content, indent=2)}}}
-        r = await client.patch(GIST_URL, headers=GIST_HEADERS, json=payload, timeout=10.0)
-        return r.status_code == 200
-    except Exception as e:
-        print(f"Gist Set Error: {e}", flush=True)
-        return False
+    payload = {"files": {filename: {"content": json.dumps(content, indent=2)}}}
+    for attempt in range(3):
+        try:
+            r = await client.patch(GIST_URL, headers=GIST_HEADERS, json=payload, timeout=15.0)
+            if r.status_code == 200:
+                return True
+        except Exception as e:
+            if attempt == 2:
+                print(f"Gist Set Error after 3 retries ({filename}): {e}", flush=True)
+            await asyncio.sleep(2)
+    return False
 
 async def save_watchlist(client): await gist_set(client, 'watchlist.json', {'coins': WATCHLIST})
 async def load_watchlist(client):
@@ -459,7 +463,7 @@ async def bot1_scan(client: httpx.AsyncClient):
                             asyncio.create_task(send_telegram(client, f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n<b>Volume:</b> ${volume_24h:,.0f}"))
             if added > 0: await save_watchlist(client)
         except Exception as e:
-            print(f"Bot1 Error: {e}", flush=True)
+            print(f"Bot1 Scan Transient Error ({type(e).__name__}): {e}", flush=True)
         await asyncio.sleep(60)
 
 async def process_symbol(client, symbol):
