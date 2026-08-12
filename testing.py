@@ -17,7 +17,7 @@ app = Flask(__name__)
 log = logging.getLogger('werkzeug')
 log.setLevel(logging.ERROR)
 
-# ===== CONFIG =====
+# ===== CONFIGURATION =====
 PUMP_PERCENT_24H = 40
 WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
@@ -27,10 +27,10 @@ RISK_PER_TRADE = 0.20   # 20% Margin
 MAX_OPEN_TRADES = 4     # Max 4 parallel trades
 MIN_VOLUME_24H = 2000000
 
-# Targets & SL
+# Risk & Targets
 EMERGENCY_SL_PERCENT = 0.020      # 2.0% Max Emergency Hard SL
-TARGET_TP_PERCENT = 0.050         # 5.0% TP Target
-BREAKEVEN_TRIGGER_PERCENT = 0.030 # Shift SL to Entry at +3% profit
+TARGET_TP_PERCENT = 0.050         # 5.0% Target TP
+BREAKEVEN_TRIGGER_PERCENT = 0.030 # Shift SL to Entry at +3.0% profit
 
 # CoinDCX Futures Fee Structure (Taker 0.05% + 18% GST)
 TAKER_FEE = 0.0005
@@ -55,7 +55,13 @@ BALANCE_DATA = {
     "lifetime_pnl_percent": 0.0
 }
 
-# ===== GIST HELPERS =====
+# ===== COINDCX SYMBOL MAPPING =====
+def get_coindcx_pair(symbol):
+    """Converts standard symbol (INXUSDT) to CoinDCX Futures format (F-INX_USDT)"""
+    clean_base = symbol.replace('USDT', '').replace('.P', '')
+    return f"F-{clean_base}_USDT"
+
+# ===== GIST BACKUP & SYNC =====
 async def gist_get(client: httpx.AsyncClient, filename):
     if not GIST_URL or not GITHUB_TOKEN: return {}
     try:
@@ -67,7 +73,7 @@ async def gist_get(client: httpx.AsyncClient, filename):
             return json.loads(content) if content else {}
         return {}
     except Exception as e:
-        print(f"Gist Get Error: {e}", flush=True)
+        print(f"Gist Get Error ({filename}): {e}", flush=True)
         return {}
 
 async def gist_set(client: httpx.AsyncClient, filename, content):
@@ -76,11 +82,10 @@ async def gist_set(client: httpx.AsyncClient, filename, content):
     for attempt in range(3):
         try:
             r = await client.patch(GIST_URL, headers=GIST_HEADERS, json=payload, timeout=15.0)
-            if r.status_code == 200:
-                return True
+            if r.status_code == 200: return True
         except Exception as e:
             if attempt == 2:
-                print(f"Gist Set Error after 3 retries ({filename}): {e}", flush=True)
+                print(f"Gist Set Error ({filename}): {e}", flush=True)
             await asyncio.sleep(2)
     return False
 
@@ -92,9 +97,10 @@ async def load_watchlist(client):
     if data and 'coins' in data:
         for symbol, details in data['coins'].items():
             if isinstance(details, dict):
-                WATCHLIST[symbol] = details
-                WATCHLIST[symbol].setdefault('last_state', 'reset')
-                WATCHLIST[symbol].setdefault('attempts', 0)
+                clean_sym = symbol.replace('.P', '')
+                WATCHLIST[clean_sym] = details
+                WATCHLIST[clean_sym].setdefault('last_state', 'reset')
+                WATCHLIST[clean_sym].setdefault('attempts', 0)
     print(f"Gist Loaded: {len(WATCHLIST)} coins", flush=True)
 
 async def save_paper_trades(client): await gist_set(client, 'paper_trades.json', PAPER_TRADES)
@@ -117,7 +123,7 @@ async def load_balance_data(client):
         }
         await save_balance_data(client)
 
-# ===== TELEGRAM ALERT HELPER =====
+# ===== TELEGRAM NOTIFIER =====
 async def send_telegram(client: httpx.AsyncClient, message):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -127,34 +133,34 @@ async def send_telegram(client: httpx.AsyncClient, message):
             r = await client.post(url, json=payload, timeout=10.0)
             if r.status_code == 200: return
         except Exception as e:
-            print(f"Telegram Send Retry {attempt+1} Error: {e}", flush=True)
+            print(f"Telegram Retry {attempt+1} Error: {e}", flush=True)
             await asyncio.sleep(2)
 
-# ===== TELEGRAM COMMANDS =====
+# ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Online (5m Timeframe - 300 EMA Custom Multi-Entry Strategy Active)")
+    await update.message.reply_text("✅ Bot Active (5m Timeframe - Exact Candle Entry Strategy Active)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
-        symbol = context.args[0].upper()
+        symbol = context.args[0].upper().replace('.P', '')
         async with _lock:
             WATCHLIST[symbol] = {'time': time.time(), 'attempts': 0, 'last_state': 'reset'}
         client = context.bot_data.get("http_client")
         if client: await save_watchlist(client)
-        await update.message.reply_text(f"✅ {symbol} added to watchlist")
+        await update.message.reply_text(f"✅ <b>{symbol}</b> added to watchlist (Mapped: <code>{get_coindcx_pair(symbol)}</code>)", parse_mode="HTML")
 
 async def remove_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
-        symbol = context.args[0].upper()
+        symbol = context.args[0].upper().replace('.P', '')
         async with _lock:
             WATCHLIST.pop(symbol, None)
         client = context.bot_data.get("http_client")
         if client: await save_watchlist(client)
-        await update.message.reply_text(f"🗑️ {symbol} removed")
+        await update.message.reply_text(f"🗑️ <b>{symbol}</b> removed from watchlist", parse_mode="HTML")
 
 async def watchlist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     coins = ", ".join(WATCHLIST.keys()) if WATCHLIST else "Empty"
-    await update.message.reply_text(f"📋 Watchlist ({len(WATCHLIST)}): {coins}")
+    await update.message.reply_text(f"📋 <b>Watchlist ({len(WATCHLIST)}):</b>\n{coins}", parse_mode="HTML")
 
 async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     open_trades_list = {k: v for k, v in PAPER_TRADES.items() if v.get('status') == 'OPEN'}
@@ -166,18 +172,18 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt', 1)
         is_be = "🛡️ (BREAK-EVEN)" if trade.get('is_breakeven') else ""
         amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
-        msg += f"<b>{symbol}</b> | SHORT | Entry Attempt #{attempt}/3\nEntry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | Max SL: <code>${sl}</code> {is_be}\nAmount: <code>${amount:.2f} (20%)</code>\n\n"
+        msg += f"<b>{symbol}</b> (CoinDCX: <code>{get_coindcx_pair(symbol)}</code>)\nAttempt: #{attempt}/3 | Entry: <code>${entry:.6f}</code>\nTP: <code>${tp}</code> | Max SL: <code>${sl}</code> {is_be}\nMargin: <code>${amount:.2f}</code>\n\n"
     msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
     await update.message.reply_text(msg, parse_mode="HTML")
 
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args: return await update.message.reply_text("Use: /close SYMBOL")
-    symbol = context.args[0].upper()
+    symbol = context.args[0].upper().replace('.P', '')
     client = context.bot_data.get("http_client")
 
     async with _lock:
         if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status'] != 'OPEN':
-            return await update.message.reply_text(f"{symbol} me koi open trade nahi hai")
+            return await update.message.reply_text(f"❌ {symbol} me koi open trade nahi hai")
         trade = PAPER_TRADES[symbol].copy()
 
     df = await get_klines(client, symbol)
@@ -220,14 +226,16 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = BALANCE_DATA
     await update.message.reply_text(
-        f"📊 <b>ACCOUNT SUMMARY</b>\n\nStarting: ${bal['starting_balance']:.2f}\nCurrent: ${bal['total_balance']:.2f}\nLifetime PnL: {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}",
+        f"📊 <b>ACCOUNT SUMMARY</b>\n\nStarting: ${bal['starting_balance']:.2f}\nCurrent Balance: ${bal['total_balance']:.2f}\nLifetime PnL: {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}",
         parse_mode="HTML"
     )
 
-# ===== MARKET DATA & INDICATORS =====
+# ===== MARKET DATA & INDICATOR ENGINE =====
 async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='5', limit=400):
     url = "https://api.bybit.com/v5/market/kline"
-    params = {'category': 'linear', 'symbol': symbol, 'interval': interval, 'limit': limit}
+    # Ensure standard symbol for Bybit API
+    bybit_symbol = symbol if symbol.endswith('USDT') else f"{symbol}USDT"
+    params = {'category': 'linear', 'symbol': bybit_symbol, 'interval': interval, 'limit': limit}
     try:
         res = await client.get(url, params=params, timeout=10.0)
         data = res.json()
@@ -241,8 +249,7 @@ async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='5'
     return None
 
 async def get_klines_coindcx_async(client: httpx.AsyncClient, symbol, interval='5m', limit=400):
-    base = symbol.replace('USDT', '')
-    pair = f"F-{base}_USDT"
+    pair = get_coindcx_pair(symbol)
     url = "https://api.coindcx.com/exchange/v1/candles"
     params = {'pair': pair, 'interval': interval, 'limit': limit}
     try:
@@ -314,7 +321,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
     return df
 
-# ===== STRATEGY EXECUTION & RISK CONTROL =====
+# ===== TRADE MANAGEMENT & EXITS =====
 async def check_paper_trades(client, df, symbol):
     global BALANCE_DATA
     async with _lock:
@@ -326,7 +333,7 @@ async def check_paper_trades(client, df, symbol):
     candle_close = df['close'].iloc[-1]
     st_line = df['st_line'].iloc[-1]
 
-    # Trailing Break-Even Trigger (+3%)
+    # Trailing Break-Even Check (+3%)
     max_favorable_profit_pct = (trade['entry'] - candle_low) / trade['entry']
     if max_favorable_profit_pct >= BREAKEVEN_TRIGGER_PERCENT and trade['sl'] > trade['entry']:
         async with _lock:
@@ -336,7 +343,7 @@ async def check_paper_trades(client, df, symbol):
                 trade['sl'] = trade['entry']
                 trade['is_breakeven'] = True
         await save_paper_trades(client)
-        asyncio.create_task(send_telegram(client, f"🛡️ <b>BREAK-EVEN ACTIVATED</b> 🛡️\n\n<b>Coin:</b> {symbol}\nShifted SL to Entry (${trade['entry']:.6f}). Trade is RISK-FREE!"))
+        asyncio.create_task(send_telegram(client, f"🛡️ <b>BREAK-EVEN ACTIVATED</b>\n\n<b>Coin:</b> {symbol}\nShifted SL to Entry Price (${trade['entry']:.6f}). Trade is now RISK-FREE!"))
 
     tp_hit = candle_low <= trade['tp']
     sl_hit = candle_high >= trade['sl']
@@ -349,7 +356,7 @@ async def check_paper_trades(client, df, symbol):
         if tp_hit:
             exit_price = trade['tp']; status_code = 'CLOSED_TP'; status_emoji = '✅'
             reason_txt = f"Target TP Hit ({TARGET_TP_PERCENT*100:.1f}%)"
-            remove_from_watchlist = True  # Rule: Target Hit -> Always Remove Coin
+            remove_from_watchlist = True  # Rule: Target Hit -> Remove Coin Immediately
         elif sl_hit:
             exit_price = trade['sl']; status_code = 'CLOSED_SL'; status_emoji = '❌'
             reason_txt = "Break-Even SL Hit (0%)" if trade.get('is_breakeven') else f"Emergency Max SL Hit ({EMERGENCY_SL_PERCENT*100:.1f}%)"
@@ -392,7 +399,9 @@ async def check_paper_trades(client, df, symbol):
 
         msg = (
             f"{status_emoji} <b>PAPER TRADE CLOSED</b> {status_emoji}\n\n"
-            f"<b>Coin:</b> {symbol}\n<b>Reason:</b> {reason_txt}\n<b>Entry:</b> ${trade['entry']:.6f}\n<b>Exit:</b> ${exit_price:.6f}\n<b>Attempt:</b> #{attempt_num}/3\n"
+            f"<b>Coin:</b> {symbol} (<code>{get_coindcx_pair(symbol)}</code>)\n"
+            f"<b>Reason:</b> {reason_txt}\n<b>Entry:</b> ${trade['entry']:.6f}\n<b>Exit:</b> ${exit_price:.6f}\n"
+            f"<b>Attempt:</b> #{attempt_num}/3\n"
             f"<b>Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n<b>New Balance:</b> ${trade_snapshot_balance:.2f}"
         )
         if remove_from_watchlist: msg += f"\n\n🗑️ <b>{symbol} removed from watchlist</b>"
@@ -410,21 +419,24 @@ async def bot1_scan(client: httpx.AsyncClient):
             if data.get('retCode') == 0 and data.get('result'):
                 for t in data['result']['list']:
                     market = t.get('symbol', '')
-                    if not market.endswith('USDT'): continue
-                    symbol = market
+                    if not market.endswith('USDT') and not market.endswith('USDT.P'): continue
+                    
+                    # Fix: Clean symbol to standard format (e.g. INXUSDT)
+                    symbol = market.replace('.P', '')
+
                     try:
                         change_24h = float(t.get('price24hPcnt', 0)) * 100
                         volume_24h = float(t.get('volume24h', 0))
                         last_price = float(t.get('lastPrice', 0))
                     except: continue
 
-                    if volume_24h < MIN_VOLUME_24H or last_price < 0.001 or '.P' in symbol: continue
+                    if volume_24h < MIN_VOLUME_24H or last_price < 0.001: continue
 
                     async with _lock:
                         if change_24h >= PUMP_PERCENT_24H and symbol not in WATCHLIST:
                             WATCHLIST[symbol] = {'time': time.time(), 'attempts': 0, 'last_state': 'reset'}
                             added += 1
-                            asyncio.create_task(send_telegram(client, f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>24h:</b> +{change_24h:.2f}%\n<b>Volume:</b> ${volume_24h:,.0f}"))
+                            asyncio.create_task(send_telegram(client, f"🚨 <b>40% PUMP DETECTED</b> 🚨\n\n<b>Coin:</b> {symbol}\n<b>CoinDCX Pair:</b> <code>{get_coindcx_pair(symbol)}</code>\n<b>24h Change:</b> +{change_24h:.2f}%\n<b>24h Volume:</b> ${volume_24h:,.0f}"))
             if added > 0: await save_watchlist(client)
         except Exception as e:
             print(f"Bot1 Scan Error: {e}", flush=True)
@@ -440,7 +452,7 @@ async def process_symbol(client, symbol):
 
     st_line = df['st_line'].iloc[-1]
     ema_val = df['ema_val'].iloc[-1]
-    close_price = df['close'].iloc[-1]
+    close_price = df['close'].iloc[-1]  # Exact close price of the last 5m candle
     
     if any(math.isnan(v) for v in [st_line, ema_val, close_price]): return False
 
@@ -458,23 +470,28 @@ async def process_symbol(client, symbol):
         open_trade_exists = open_trade and open_trade.get('status') == 'OPEN'
         active_open_trades = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
 
-        # Entry Conditions Strategy Logic
+        # Entry Strategy Rules
         should_enter = False
 
         if attempts_done == 0:
-            # 1st Entry Criteria: Price crosses below 300 EMA
+            # FIRST ENTRY RULE:
+            # Exact candle close price below 300 EMA triggers Entry
             if close_price < ema_val and last_state == 'reset':
                 should_enter = True
+
         elif attempts_done in [1, 2]:
-            # 2nd & 3rd Entry Criteria: Price < Supertrend AND Supertrend < 300 EMA
+            # SECOND & THIRD ENTRY RULE:
+            # Price < Supertrend AND Supertrend < 300 EMA
             price_below_st = close_price < st_line
             st_below_ema = st_line < ema_val
             if price_below_st and st_below_ema and last_state == 'reset':
                 should_enter = True
 
         if should_enter and attempts_done < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
-            tp_price = round(close_price * (1 - TARGET_TP_PERCENT), 6)
-            sl_price = round(close_price * (1 + EMERGENCY_SL_PERCENT), 6)
+            # Entry Price is set to exact candle close price
+            entry_price = round(close_price, 6)
+            tp_price = round(entry_price * (1 - TARGET_TP_PERCENT), 6)
+            sl_price = round(entry_price * (1 + EMERGENCY_SL_PERCENT), 6)
             trade_amount = BALANCE_DATA['total_balance'] * RISK_PER_TRADE
 
             current_attempt = attempts_done + 1
@@ -482,7 +499,7 @@ async def process_symbol(client, symbol):
             WATCHLIST[symbol]['last_state'] = 'short'
 
             PAPER_TRADES[symbol] = {
-                'entry': close_price, 'tp': tp_price, 'sl': sl_price,
+                'entry': entry_price, 'tp': tp_price, 'sl': sl_price,
                 'status': 'OPEN', 'time': time.time(),
                 'balance_at_entry': BALANCE_DATA['total_balance'],
                 'trade_amount_usdt': trade_amount,
@@ -492,16 +509,19 @@ async def process_symbol(client, symbol):
 
             msg_to_send = (
                 f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n"
-                f"<b>Coin:</b> {symbol}\n<b>Entry Attempt:</b> #{current_attempt}/3\n"
-                f"<b>Entry Price:</b> ${close_price:.6f}\n"
-                f"<b>Amount:</b> ${trade_amount:.2f} (20%)\n<b>TP Target:</b> ${tp_price} (5.0%)\n"
-                f"<b>Max SL:</b> ${sl_price} (2.0%)\n"
-                f"<b>Rule:</b> Price Exit > Supertrend"
+                f"<b>Coin:</b> {symbol}\n"
+                f"<b>CoinDCX Pair:</b> <code>{get_coindcx_pair(symbol)}</code>\n"
+                f"<b>Entry Attempt:</b> #{current_attempt}/3\n"
+                f"<b>Exact Entry Price:</b> ${entry_price:.6f}\n"
+                f"<b>Margin Amount:</b> ${trade_amount:.2f} (20%)\n"
+                f"<b>TP Target (-5%):</b> ${tp_price}\n"
+                f"<b>Max SL (+2%):</b> ${sl_price}\n"
+                f"<b>Exit Rule:</b> Price Close > Supertrend Line"
             )
             new_entry = True
             watchlist_changed = True
 
-        # State Reset Logic (Bounce back above Supertrend to reset for next re-entry)
+        # State Reset Logic: Bounce above Supertrend resets for next attempt
         if close_price > st_line:
             WATCHLIST[symbol]['last_state'] = 'reset'
 
@@ -533,7 +553,7 @@ async def bot2_scan(client: httpx.AsyncClient):
             print(f"Bot2 Error: {e}", flush=True)
         await asyncio.sleep(15)
 
-# ===== SERVER & MAIN =====
+# ===== SERVER & MAIN APP =====
 @app.route('/')
 def home(): return jsonify({"status": "Bot Running", "watchlist_count": len(WATCHLIST)})
 
