@@ -426,7 +426,12 @@ async def check_paper_trades(client, df, symbol):
             PAPER_TRADES[symbol]['pnl_percent'] = round(net_pnl_percent, 2)
             PAPER_TRADES[symbol]['pnl_usdt'] = round(net_pnl_usdt, 2)
 
-            if remove_from_watchlist: WATCHLIST.pop(symbol, None)
+            # --- FIX FOR 2nd/3rd ENTRY ---
+            if remove_from_watchlist:
+                WATCHLIST.pop(symbol, None)
+            else:
+                if symbol in WATCHLIST:
+                    WATCHLIST[symbol]['last_state'] = 'reset'  # Auto-reset last_state so next candle can take 2nd/3rd entry
 
         await save_balance_data(client)
         await save_paper_trades(client)
