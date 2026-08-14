@@ -137,7 +137,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Direct 300 EMA Low-Break Entry + Step Trailing SL)")
+    await update.message.reply_text("✅ Bot Active (Locked First 300 EMA Low Entry + Step Trailing SL)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -388,7 +388,6 @@ async def check_paper_trades(client, df, symbol):
         current_lowest = trade.get('lowest_price', trade['tp'])
         if candle_low < current_lowest:
             new_lowest = candle_low
-            # SL moves down from entry price proportionally as price dumps further (Locks 80% of extra gains)
             new_sl = trade['entry'] - (trade['entry'] - new_lowest) * 0.80  
             
             if new_sl < trade['sl']:
@@ -535,24 +534,24 @@ async def process_symbol(client, symbol):
 
         should_enter = False
 
-        # --- 1st ENTRY LOGIC (DIRECT 300 EMA LOW BREAK) ---
+        # --- 1st ENTRY LOGIC (LOCKED FIRST 300 EMA CROSSOVER LOW) ---
         if attempts_done == 0:
             is_crossover = (prev_close >= prev_ema) and (close_price < ema_val)
 
-            if is_crossover:
-                # Mark the low of the candle that crosses below 300 EMA
-                WATCHLIST[symbol]['trigger_low'] = df['low'].iloc[-1]
-                watchlist_changed = True
-            
-            elif trigger_low is not None:
-                # Entry as soon as any candle breaks the crossing candle's low
+            # LOCK the low of the FIRST candle that crosses below 300 EMA
+            if trigger_low is None:
+                if is_crossover:
+                    WATCHLIST[symbol]['trigger_low'] = df['low'].iloc[-1]
+                    watchlist_changed = True
+            else:
+                # Entry as soon as ANY candle breaks the locked FIRST crossing candle's low
                 if candle_low < trigger_low:
                     should_enter = True
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
                 
-                # Reset if price goes back above 300 EMA
-                elif close_price > ema_val:
+                # Reset trigger_low ONLY if trend reverses (Candle closes above Supertrend Line)
+                elif close_price > st_line:
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
 
