@@ -137,7 +137,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (5m Timeframe - Clean TP1 + Step Trailing SL Strategy)")
+    await update.message.reply_text("✅ Bot Active (Direct 300 EMA Low-Break Entry + Step Trailing SL)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -169,7 +169,7 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📊 <b>OPEN TRADES ({len(open_trades_list)}/{MAX_OPEN_TRADES})</b>\n\n"
     for symbol, trade in open_trades_list.items():
         entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt', 1)
-        tp1_status = "🎯 (50% TP BOOKED - TRAILING SL ACTIVE)" if trade.get('tp1_hit') else ""
+        tp1_status = "🎯 (50% TP BOOKED - STEP TRAILING SL ACTIVE)" if trade.get('tp1_hit') else ""
         amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
         active_qty = "50%" if trade.get('tp1_hit') else "100%"
         msg += f"<b>{symbol}</b> (CoinDCX: <code>{get_coindcx_pair(symbol)}</code>)\nAttempt: #{attempt}/3 | Entry: <code>${entry:.6f}</code>\nActive Qty: <code>{active_qty}</code> {tp1_status}\nTarget TP1: <code>${tp}</code> | Trailing SL: <code>${sl:.6f}</code>\nMargin: <code>${amount:.2f}</code>\n\n"
@@ -387,14 +387,10 @@ async def check_paper_trades(client, df, symbol):
     if trade.get('tp1_hit'):
         current_lowest = trade.get('lowest_price', trade['tp'])
         if candle_low < current_lowest:
-            # Price went further down below previous lowest
             new_lowest = candle_low
-            drop_from_tp1 = (trade['tp'] - new_lowest) / trade['tp']
+            # SL moves down from entry price proportionally as price dumps further (Locks 80% of extra gains)
+            new_sl = trade['entry'] - (trade['entry'] - new_lowest) * 0.80  
             
-            # SL moves down from entry price proportionally as price dumps further
-            new_sl = trade['entry'] - (trade['entry'] - new_lowest) * 0.80  # Locks 80% of further gains
-            
-            # Ensure SL only moves DOWNWARDS (never upwards)
             if new_sl < trade['sl']:
                 async with _lock:
                     if symbol in PAPER_TRADES:
@@ -539,26 +535,23 @@ async def process_symbol(client, symbol):
 
         should_enter = False
 
-        # --- 1st ENTRY LOGIC ---
+        # --- 1st ENTRY LOGIC (DIRECT 300 EMA LOW BREAK) ---
         if attempts_done == 0:
             is_crossover = (prev_close >= prev_ema) and (close_price < ema_val)
 
             if is_crossover:
-                open_p = df['open'].iloc[-1]
-                close_p = df['close'].iloc[-1]
-                candle_drop = (open_p - close_p) / open_p if open_p > 0 else 0
-
-                if candle_drop < 0.08:  # Single candle dump filter (<8%)
-                    WATCHLIST[symbol]['trigger_low'] = df['low'].iloc[-1]
-                    watchlist_changed = True
+                # Mark the low of the candle that crosses below 300 EMA
+                WATCHLIST[symbol]['trigger_low'] = df['low'].iloc[-1]
+                watchlist_changed = True
             
             elif trigger_low is not None:
+                # Entry as soon as any candle breaks the crossing candle's low
                 if candle_low < trigger_low:
-                    if close_price <= trigger_low * 1.01:  # Bounce filter (<= 1% bounce)
-                        should_enter = True
+                    should_enter = True
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
                 
+                # Reset if price goes back above 300 EMA
                 elif close_price > ema_val:
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
