@@ -137,7 +137,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Locked First 300 EMA Low Entry + Step Trailing SL)")
+    await update.message.reply_text("✅ Bot Active (Locked First 300 EMA Low Entry + TradingView 9-SMA Smoothed EMA)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -319,8 +319,9 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else:
             df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
 
-    ema_raw = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
-    df['ema_val'] = ema_raw.rolling(window=9, min_periods=1).mean()
+    # --- EXACT TRADINGVIEW MATCH (300 EMA + 9 SMA Smoothing) ---
+    ema_300 = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
+    df['ema_val'] = ema_300.rolling(window=9, min_periods=1).mean()
     return df
 
 # ===== TRADE MANAGEMENT & EXITS =====
@@ -590,7 +591,7 @@ async def process_symbol(client, symbol):
                 f"<b>Entry Attempt:</b> #{current_attempt}/3\n"
                 f"<b>Confirmed Entry Price:</b> ${entry_price:.6f}\n"
                 f"<b>Margin Amount:</b> ${trade_amount:.2f} (20%)\n"
-                f"<b>TP1 Target (-5%):</b> ${tp_price} (50% Qty)\n"
+                f"<b>TP1 Target (-5%):</b> ${tp_price}\n"
                 f"<b>Max SL (+2%):</b> ${sl_price}\n"
                 f"<b>Runner Exit:</b> Candle Close > Supertrend Line"
             )
