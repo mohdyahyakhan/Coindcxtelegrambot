@@ -137,7 +137,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Strict 2-Step First 300 EMA Breakdown System)")
+    await update.message.reply_text("✅ Bot Active (Exact Locked Low Breakout Execution)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -500,7 +500,7 @@ async def bot1_scan(client: httpx.AsyncClient):
             print(f"Bot1 Scan Error: {e}", flush=True)
         await asyncio.sleep(60)
 
-# ===== PROCESS SYMBOL BOT 2 (STRICT 2-STEP LOCK FIX) =====
+# ===== PROCESS SYMBOL BOT 2 (EXACT BREAKOUT LEVEL ENTRY FIX) =====
 async def process_symbol(client, symbol):
     df = await get_klines(client, symbol)
     if df is None or len(df) < EMA_PERIOD + 2: return False
@@ -531,24 +531,25 @@ async def process_symbol(client, symbol):
         active_open_trades = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
 
         should_enter = False
+        execution_entry_price = None
 
-        # --- STRICT 1st ENTRY LOGIC (PHASE 1: LOCK LOW, PHASE 2: BREAKDOWN ENTRY) ---
+        # --- STRICT 1st ENTRY LOGIC (STEP 1: LOCK LOW, STEP 2: BREAKOUT ENTRY AT LOCKED LEVEL) ---
         if attempts_done == 0:
-            # PHASE 1: Pehli crossover candle ka Low LOCK karo (Trade mat lo)
+            # PHASE 1: Pehli EMA Breakdown candle ka Low LOCK karo (Trade execute mat karo)
             if trigger_low is None:
                 if close_price < ema_val:
                     WATCHLIST[symbol]['trigger_low'] = candle_low
                     watchlist_changed = True
-                    # should_enter False hi rahega taaki pehli candle par entry na ho
 
-            # PHASE 2: Lock ho chuka hai, ab check karo ki koi AGLI candle low todti hai ya nahi
+            # PHASE 2: Agli koi candle low todti hai toh trade EXACT Breakout level par lo
             else:
                 if candle_low < trigger_low:
                     should_enter = True
+                    execution_entry_price = trigger_low  # Trade entry exact locked level par fix hogi
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
                 
-                # Agar price wapas EMA ke UPAR chali jaye toh lock RESET kar do
+                # Agar price wapas EMA ke UPAR close ho jaye toh lock RESET kar do
                 elif close_price > ema_val:
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
@@ -559,10 +560,11 @@ async def process_symbol(client, symbol):
             st_below_ema = st_line < ema_val
             if price_below_st and st_below_ema and last_state == 'reset':
                 should_enter = True
+                execution_entry_price = close_price
 
         # EXECUTE ENTRY IF CONDITIONS MET
         if should_enter and attempts_done < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
-            entry_price = round(close_price, 6)
+            entry_price = round(execution_entry_price, 6)
             tp_price = round(entry_price * (1 - TARGET_TP_PERCENT), 6)
             sl_price = round(entry_price * (1 + EMERGENCY_SL_PERCENT), 6)
             trade_amount = BALANCE_DATA['total_balance'] * RISK_PER_TRADE
@@ -586,7 +588,7 @@ async def process_symbol(client, symbol):
                 f"<b>Coin:</b> {symbol}\n"
                 f"<b>CoinDCX Pair:</b> <code>{get_coindcx_pair(symbol)}</code>\n"
                 f"<b>Entry Attempt:</b> #{current_attempt}/3\n"
-                f"<b>Confirmed Entry Price:</b> ${entry_price:.6f}\n"
+                f"<b>Confirmed Entry Price:</b> ${entry_price:.6f} (Breakout Level)\n"
                 f"<b>Margin Amount:</b> ${trade_amount:.2f} (20%)\n"
                 f"<b>TP1 Target (-5%):</b> ${tp_price}\n"
                 f"<b>Max SL (+2%):</b> ${sl_price}\n"
