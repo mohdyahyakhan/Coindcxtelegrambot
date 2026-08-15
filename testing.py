@@ -137,7 +137,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Locked First 300 EMA Low Entry + TradingView 9-SMA Smoothed EMA)")
+    await update.message.reply_text("✅ Bot Active (Strict 2-Step First 300 EMA Breakdown System)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -363,7 +363,7 @@ async def check_paper_trades(client, df, symbol):
 
                 PAPER_TRADES[symbol]['tp1_hit'] = True
                 PAPER_TRADES[symbol]['sl'] = trade['entry']  # Shift SL to Break-Even Entry
-                PAPER_TRADES[symbol]['lowest_price'] = candle_low # Track lowest price reached
+                PAPER_TRADES[symbol]['lowest_price'] = candle_low
                 PAPER_TRADES[symbol]['is_breakeven'] = True
 
                 trade['tp1_hit'] = True
@@ -500,7 +500,7 @@ async def bot1_scan(client: httpx.AsyncClient):
             print(f"Bot1 Scan Error: {e}", flush=True)
         await asyncio.sleep(60)
 
-# ===== PROCESS SYMBOL BOT 2 =====
+# ===== PROCESS SYMBOL BOT 2 (STRICT 2-STEP LOCK FIX) =====
 async def process_symbol(client, symbol):
     df = await get_klines(client, symbol)
     if df is None or len(df) < EMA_PERIOD + 2: return False
@@ -513,9 +513,6 @@ async def process_symbol(client, symbol):
     close_price = df['close'].iloc[-1]
     candle_low = df['low'].iloc[-1]
 
-    prev_close = df['close'].iloc[-2]
-    prev_ema = df['ema_val'].iloc[-2]
-    
     if any(math.isnan(v) for v in [st_line, ema_val, close_price, candle_low]): return False
 
     watchlist_changed = False
@@ -535,24 +532,24 @@ async def process_symbol(client, symbol):
 
         should_enter = False
 
-        # --- 1st ENTRY LOGIC (LOCKED FIRST 300 EMA CROSSOVER LOW) ---
+        # --- STRICT 1st ENTRY LOGIC (PHASE 1: LOCK LOW, PHASE 2: BREAKDOWN ENTRY) ---
         if attempts_done == 0:
-            is_crossover = (prev_close >= prev_ema) and (close_price < ema_val)
-
-            # LOCK the low of the FIRST candle that crosses below 300 EMA
+            # PHASE 1: Pehli crossover candle ka Low LOCK karo (Trade mat lo)
             if trigger_low is None:
-                if is_crossover:
-                    WATCHLIST[symbol]['trigger_low'] = df['low'].iloc[-1]
+                if close_price < ema_val:
+                    WATCHLIST[symbol]['trigger_low'] = candle_low
                     watchlist_changed = True
+                    # should_enter False hi rahega taaki pehli candle par entry na ho
+
+            # PHASE 2: Lock ho chuka hai, ab check karo ki koi AGLI candle low todti hai ya nahi
             else:
-                # Entry as soon as ANY candle breaks the locked FIRST crossing candle's low
                 if candle_low < trigger_low:
                     should_enter = True
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
                 
-                # Reset trigger_low ONLY if trend reverses (Candle closes above Supertrend Line)
-                elif close_price > st_line:
+                # Agar price wapas EMA ke UPAR chali jaye toh lock RESET kar do
+                elif close_price > ema_val:
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
 
