@@ -137,7 +137,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Strict Low-Lock & Breakout Execution Fix Applied)")
+    await update.message.reply_text("✅ Bot Active (Strict First Crossover Low Lock Implemented)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -500,7 +500,7 @@ async def bot1_scan(client: httpx.AsyncClient):
             print(f"Bot1 Scan Error: {e}", flush=True)
         await asyncio.sleep(60)
 
-# ===== PROCESS SYMBOL BOT 2 (FIXED ENTRY LOGIC) =====
+# ===== PROCESS SYMBOL BOT 2 (STRICT FIRST CROSSOVER LOW BREAK LOGIC) =====
 async def process_symbol(client, symbol):
     df = await get_klines(client, symbol)
     if df is None or len(df) < EMA_PERIOD + 2: return False
@@ -513,7 +513,11 @@ async def process_symbol(client, symbol):
     close_price = df['close'].iloc[-1]
     candle_low = df['low'].iloc[-1]
 
-    if any(math.isnan(v) for v in [st_line, ema_val, close_price, candle_low]): return False
+    # Previous candle values for TRUE Crossover check
+    prev_close = df['close'].iloc[-2]
+    prev_ema = df['ema_val'].iloc[-2]
+
+    if any(math.isnan(v) for v in [st_line, ema_val, close_price, candle_low, prev_close, prev_ema]): return False
 
     watchlist_changed = False
     msg_to_send = None
@@ -533,24 +537,28 @@ async def process_symbol(client, symbol):
         should_enter = False
         execution_entry_price = None
 
-        # --- STRICT 1st ENTRY LOGIC (STRICT LOCK -> ENTRY ON SUBSEQUENT CANDLE) ---
+        # --- STRICT 1st ENTRY LOGIC (LOCK FIRST CANDLE LOW & WAIT FOR BREAKOUT) ---
         if attempts_done == 0:
-            # STEP 1: Pehli EMA Breakdown candle par LOW LOCK karo (Usi scan cycle me trade mt lo)
+            is_cross_down = (prev_close >= prev_ema) and (close_price < ema_val)
+
+            # STEP 1: Pehle koi low lock nahi hua hai
             if trigger_low is None:
-                if close_price < ema_val:
+                if is_cross_down:
+                    # Sirf pehli crossover candle ka low point LOCK kar lo
                     WATCHLIST[symbol]['trigger_low'] = candle_low
                     watchlist_changed = True
 
-            # STEP 2: Lock pehle se set hai, ab AAGLI candles me check karo ki Low toota ya nahi
+            # STEP 2: First Crossover Candle ka Low Lock ho chuka hai
             else:
-                if candle_low < trigger_low:
+                # Jab koi subsequent candle is LOCKED LOW KO BREAK kare, tabhi Short entry lo
+                if candle_low < trigger_low and not should_enter:
                     should_enter = True
-                    execution_entry_price = trigger_low  # Exact Locked Low Level (Breakout)
-                    WATCHLIST[symbol]['trigger_low'] = None
+                    execution_entry_price = trigger_low
+                    WATCHLIST[symbol]['trigger_low'] = None  # Lock reset after entry
                     watchlist_changed = True
-                
-                # Agar Breakout se pehle price wapas EMA ke UPAR close ho jaye -> Lock Reset
-                elif close_price > ema_val:
+
+                # RESET ONLY IF trend turns Bullish (Supertrend Cross)
+                elif close_price > st_line:
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
 
