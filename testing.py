@@ -137,7 +137,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Strict First Crossover Low Lock Implemented)")
+    await update.message.reply_text("✅ Bot Active (Glitch-Free Strict EMA Crossover Engine Online)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -319,7 +319,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else:
             df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
 
-    # --- TRADINGVIEW MATCH (300 EMA + 9 SMA Smoothing) ---
+    # TradingView Match (300 EMA + 9 SMA)
     ema_300 = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     df['ema_val'] = ema_300.rolling(window=9, min_periods=1).mean()
     return df
@@ -331,12 +331,16 @@ async def check_paper_trades(client, df, symbol):
         if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status'] != 'OPEN': return
         trade = PAPER_TRADES[symbol].copy()
 
+    # Instant Execution Guard: Agli bar tak same candle fast-fill ignore karein
+    if time.time() - trade.get('time', 0) < 15:
+        return
+
     candle_low = df['low'].iloc[-1]
     candle_high = df['high'].iloc[-1]
     candle_close = df['close'].iloc[-1]
     st_line = df['st_line'].iloc[-1]
 
-    # 1. PARTIAL TP1 HIT (-5% TARGET -> CLOSE 50% QUANTITY & SET INITIAL BREAK-EVEN SL)
+    # 1. PARTIAL TP1 HIT (-5% TARGET -> CLOSE 50% QUANTITY & SET BREAK-EVEN SL)
     if candle_low <= trade['tp'] and not trade.get('tp1_hit'):
         partial_ratio = 0.5
         trade_amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
@@ -362,7 +366,7 @@ async def check_paper_trades(client, df, symbol):
                 BALANCE_DATA['lifetime_pnl_percent'] = (BALANCE_DATA['lifetime_pnl_usdt'] / BALANCE_DATA['starting_balance']) * 100
 
                 PAPER_TRADES[symbol]['tp1_hit'] = True
-                PAPER_TRADES[symbol]['sl'] = trade['entry']  # Shift SL to Break-Even Entry
+                PAPER_TRADES[symbol]['sl'] = trade['entry']  # Break-Even SL
                 PAPER_TRADES[symbol]['lowest_price'] = candle_low
                 PAPER_TRADES[symbol]['is_breakeven'] = True
 
@@ -500,7 +504,7 @@ async def bot1_scan(client: httpx.AsyncClient):
             print(f"Bot1 Scan Error: {e}", flush=True)
         await asyncio.sleep(60)
 
-# ===== PROCESS SYMBOL BOT 2 (STRICT FIRST CROSSOVER LOW BREAK LOGIC) =====
+# ===== PROCESS SYMBOL BOT 2 (GLITCH-PROOF STRICT CROSSOVER) =====
 async def process_symbol(client, symbol):
     df = await get_klines(client, symbol)
     if df is None or len(df) < EMA_PERIOD + 2: return False
@@ -513,9 +517,11 @@ async def process_symbol(client, symbol):
     close_price = df['close'].iloc[-1]
     candle_low = df['low'].iloc[-1]
 
-    # Previous candle values for TRUE Crossover check
+    # Candle 1 Step Back (Completed 5-min candle)
     prev_close = df['close'].iloc[-2]
+    prev_open = df['open'].iloc[-2]
     prev_ema = df['ema_val'].iloc[-2]
+    prev_low = df['low'].iloc[-2]
 
     if any(math.isnan(v) for v in [st_line, ema_val, close_price, candle_low, prev_close, prev_ema]): return False
 
@@ -537,27 +543,28 @@ async def process_symbol(client, symbol):
         should_enter = False
         execution_entry_price = None
 
-        # --- STRICT 1st ENTRY LOGIC (LOCK FIRST CANDLE LOW & WAIT FOR BREAKOUT) ---
+        # --- GLITCH-FREE 1st ENTRY LOGIC ---
         if attempts_done == 0:
-            is_cross_down = (prev_close >= prev_ema) and (close_price < ema_val)
+            # TRUE CROSSOVER: Previous candle body completely crossed down below EMA 300
+            is_true_crossover = (prev_open >= prev_ema or prev_close >= prev_ema) and (prev_close < prev_ema)
 
-            # STEP 1: Pehle koi low lock nahi hua hai
+            # STEP 1: LOCK FIRST CROSSOVER CANDLE LOW (If not locked yet)
             if trigger_low is None:
-                if is_cross_down:
-                    # Sirf pehli crossover candle ka low point LOCK kar lo
-                    WATCHLIST[symbol]['trigger_low'] = candle_low
+                if is_true_crossover:
+                    # Lock previous completed candle's low
+                    WATCHLIST[symbol]['trigger_low'] = prev_low
                     watchlist_changed = True
 
-            # STEP 2: First Crossover Candle ka Low Lock ho chuka hai
+            # STEP 2: BREAKOUT ENTRY CHECK
             else:
-                # Jab koi subsequent candle is LOCKED LOW KO BREAK kare, tabhi Short entry lo
-                if candle_low < trigger_low and not should_enter:
+                # ENTRY CONDITION: Current candle breaks below locked low & confirms below EMA
+                if candle_low < trigger_low and close_price < ema_val and not should_enter:
                     should_enter = True
                     execution_entry_price = trigger_low
-                    WATCHLIST[symbol]['trigger_low'] = None  # Lock reset after entry
+                    WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
 
-                # RESET ONLY IF trend turns Bullish (Supertrend Cross)
+                # RESET LOCK ONLY ON BULLISH REVERSAL (Supertrend Reversal)
                 elif close_price > st_line:
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
