@@ -137,7 +137,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Exact Locked Low Breakout Execution)")
+    await update.message.reply_text("✅ Bot Active (Strict Low-Lock & Breakout Execution Fix Applied)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -319,7 +319,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else:
             df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
 
-    # --- EXACT TRADINGVIEW MATCH (300 EMA + 9 SMA Smoothing) ---
+    # --- TRADINGVIEW MATCH (300 EMA + 9 SMA Smoothing) ---
     ema_300 = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     df['ema_val'] = ema_300.rolling(window=9, min_periods=1).mean()
     return df
@@ -500,7 +500,7 @@ async def bot1_scan(client: httpx.AsyncClient):
             print(f"Bot1 Scan Error: {e}", flush=True)
         await asyncio.sleep(60)
 
-# ===== PROCESS SYMBOL BOT 2 (EXACT BREAKOUT LEVEL ENTRY FIX) =====
+# ===== PROCESS SYMBOL BOT 2 (FIXED ENTRY LOGIC) =====
 async def process_symbol(client, symbol):
     df = await get_klines(client, symbol)
     if df is None or len(df) < EMA_PERIOD + 2: return False
@@ -533,23 +533,23 @@ async def process_symbol(client, symbol):
         should_enter = False
         execution_entry_price = None
 
-        # --- STRICT 1st ENTRY LOGIC (STEP 1: LOCK LOW, STEP 2: BREAKOUT ENTRY AT LOCKED LEVEL) ---
+        # --- STRICT 1st ENTRY LOGIC (STRICT LOCK -> ENTRY ON SUBSEQUENT CANDLE) ---
         if attempts_done == 0:
-            # PHASE 1: Pehli EMA Breakdown candle ka Low LOCK karo (Trade execute mat karo)
+            # STEP 1: Pehli EMA Breakdown candle par LOW LOCK karo (Usi scan cycle me trade mt lo)
             if trigger_low is None:
                 if close_price < ema_val:
                     WATCHLIST[symbol]['trigger_low'] = candle_low
                     watchlist_changed = True
 
-            # PHASE 2: Agli koi candle low todti hai toh trade EXACT Breakout level par lo
+            # STEP 2: Lock pehle se set hai, ab AAGLI candles me check karo ki Low toota ya nahi
             else:
                 if candle_low < trigger_low:
                     should_enter = True
-                    execution_entry_price = trigger_low  # Trade entry exact locked level par fix hogi
+                    execution_entry_price = trigger_low  # Exact Locked Low Level (Breakout)
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
                 
-                # Agar price wapas EMA ke UPAR close ho jaye toh lock RESET kar do
+                # Agar Breakout se pehle price wapas EMA ke UPAR close ho jaye -> Lock Reset
                 elif close_price > ema_val:
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
