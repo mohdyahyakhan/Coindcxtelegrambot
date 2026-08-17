@@ -97,7 +97,7 @@ async def load_watchlist(client):
             if isinstance(details, dict):
                 clean_sym = symbol.replace('.P', '')
                 WATCHLIST[clean_sym] = details
-                WATCHLIST[clean_sym].setdefault('last_state', 'reset')
+                WATCHLIST[clean_sym].setdefault('last_state', 'short')
                 WATCHLIST[clean_sym].setdefault('attempts', 0)
                 WATCHLIST[clean_sym].setdefault('trigger_low', None)
     print(f"Gist Loaded: {len(WATCHLIST)} coins", flush=True)
@@ -137,7 +137,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Glitch-Free Strict EMA Crossover Engine Online)")
+    await update.message.reply_text("✅ Bot Active (Multi-Attempt Rules Engine Online)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -169,10 +169,10 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📊 <b>OPEN TRADES ({len(open_trades_list)}/{MAX_OPEN_TRADES})</b>\n\n"
     for symbol, trade in open_trades_list.items():
         entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt', 1)
-        tp1_status = "🎯 (50% TP BOOKED - STEP TRAILING SL ACTIVE)" if trade.get('tp1_hit') else ""
+        tp1_status = "🎯 (50% TP BOOKED - BREAK-EVEN ACTIVE)" if trade.get('tp1_hit') else ""
         amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
         active_qty = "50%" if trade.get('tp1_hit') else "100%"
-        msg += f"<b>{symbol}</b> (CoinDCX: <code>{get_coindcx_pair(symbol)}</code>)\nAttempt: #{attempt}/3 | Entry: <code>${entry:.6f}</code>\nActive Qty: <code>{active_qty}</code> {tp1_status}\nTarget TP1: <code>${tp}</code> | Trailing SL: <code>${sl:.6f}</code>\nMargin: <code>${amount:.2f}</code>\n\n"
+        msg += f"<b>{symbol}</b> (CoinDCX: <code>{get_coindcx_pair(symbol)}</code>)\nAttempt: #{attempt}/3 | Entry: <code>${entry:.6f}</code>\nActive Qty: <code>{active_qty}</code> {tp1_status}\nTarget TP1: <code>${tp}</code> | SL Guard: <code>${sl:.6f}</code>\nMargin: <code>${amount:.2f}</code>\n\n"
     msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
     await update.message.reply_text(msg, parse_mode="HTML")
 
@@ -183,7 +183,7 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with _lock:
         if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status'] != 'OPEN':
-            return await update.message.reply_text(f"❌ {symbol} me koi open trade nahi hai")
+            return await update.message.reply_text(f"❌ {symbol} has no open trade.")
         trade = PAPER_TRADES[symbol].copy()
 
     df = await get_klines(client, symbol)
@@ -319,7 +319,6 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else:
             df.loc[df.index[i], 'st_line'] = df['final_upperband'].iloc[i]
 
-    # TradingView Match (300 EMA + 9 SMA)
     ema_300 = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     df['ema_val'] = ema_300.rolling(window=9, min_periods=1).mean()
     return df
@@ -331,7 +330,6 @@ async def check_paper_trades(client, df, symbol):
         if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status'] != 'OPEN': return
         trade = PAPER_TRADES[symbol].copy()
 
-    # Instant Execution Guard: Agli bar tak same candle fast-fill ignore karein
     if time.time() - trade.get('time', 0) < 15:
         return
 
@@ -340,7 +338,7 @@ async def check_paper_trades(client, df, symbol):
     candle_close = df['close'].iloc[-1]
     st_line = df['st_line'].iloc[-1]
 
-    # 1. PARTIAL TP1 HIT (-5% TARGET -> CLOSE 50% QUANTITY & SET BREAK-EVEN SL)
+    # 1. PARTIAL TP1 HIT (-5% TARGET -> CLOSE 50% QUANTITY & LOCK BREAK-EVEN SL)
     if candle_low <= trade['tp'] and not trade.get('tp1_hit'):
         partial_ratio = 0.5
         trade_amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
@@ -366,13 +364,11 @@ async def check_paper_trades(client, df, symbol):
                 BALANCE_DATA['lifetime_pnl_percent'] = (BALANCE_DATA['lifetime_pnl_usdt'] / BALANCE_DATA['starting_balance']) * 100
 
                 PAPER_TRADES[symbol]['tp1_hit'] = True
-                PAPER_TRADES[symbol]['sl'] = trade['entry']  # Break-Even SL
-                PAPER_TRADES[symbol]['lowest_price'] = candle_low
+                PAPER_TRADES[symbol]['sl'] = trade['entry']
                 PAPER_TRADES[symbol]['is_breakeven'] = True
 
                 trade['tp1_hit'] = True
                 trade['sl'] = trade['entry']
-                trade['lowest_price'] = candle_low
                 trade['is_breakeven'] = True
 
         await save_balance_data(client)
@@ -382,30 +378,16 @@ async def check_paper_trades(client, df, symbol):
             f"🎯 <b>50% PARTIAL TP HIT (-5%)</b> 🎯\n\n"
             f"<b>Coin:</b> {symbol} (<code>{get_coindcx_pair(symbol)}</code>)\n"
             f"<b>Booked Profit (50% Qty):</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n"
-            f"<b>Remaining 50% Status:</b> Step-Trailing SL Active\n"
-            f"<b>New Initial SL:</b> Break-Even (${trade['entry']:.6f})\n"
+            f"<b>Remaining 50% Status:</b> Riding Trend Until Supertrend Reversal\n"
+            f"<b>SL Guard:</b> Break-Even (${trade['entry']:.6f})\n"
             f"<b>Current Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
         )
         asyncio.create_task(send_telegram(client, msg))
 
-    # 2. STEP DYNAMIC TRAILING SL LOGIC (AFTER TP1 HIT)
-    if trade.get('tp1_hit'):
-        current_lowest = trade.get('lowest_price', trade['tp'])
-        if candle_low < current_lowest:
-            new_lowest = candle_low
-            new_sl = trade['entry'] - (trade['entry'] - new_lowest) * 0.80  
-            
-            if new_sl < trade['sl']:
-                async with _lock:
-                    if symbol in PAPER_TRADES:
-                        PAPER_TRADES[symbol]['sl'] = new_sl
-                        PAPER_TRADES[symbol]['lowest_price'] = new_lowest
-                        trade['sl'] = new_sl
-                        trade['lowest_price'] = new_lowest
-
-    # 3. FULL / REMAINING EXIT (SL Hit or Supertrend Exit)
+    # 2. RUNNER EXIT CONDITIONS
     sl_hit = candle_high >= trade['sl']
-    st_exit = candle_close > st_line
+    is_trend_green = (st_line < candle_close)
+    st_exit = is_trend_green or (candle_close > st_line)
 
     if sl_hit or st_exit:
         attempt_num = trade.get('attempt', 1)
@@ -413,12 +395,13 @@ async def check_paper_trades(client, df, symbol):
         remaining_ratio = 0.5 if tp1_done else 1.0
 
         if sl_hit:
-            exit_price = trade['sl']; status_code = 'CLOSED_SL'; status_emoji = '❌' if not tp1_done else '🛡️'
-            reason_txt = "Trailing SL Hit" if tp1_done else f"Emergency Max SL Hit ({EMERGENCY_SL_PERCENT*100:.1f}%)"
+            exit_price = trade['sl']; status_code = 'CLOSED_SL'; status_emoji = '🛡️' if tp1_done else '❌'
+            reason_txt = "Break-Even SL Hit" if tp1_done else f"Emergency Max SL Hit ({EMERGENCY_SL_PERCENT*100:.1f}%)"
         else:
-            exit_price = candle_close; status_code = 'CLOSED_ST_EXIT'; status_emoji = '🔄'
-            reason_txt = "Supertrend Reversal Exit (Runner Closed)" if tp1_done else "Supertrend Reversal Exit"
+            exit_price = candle_close; status_code = 'CLOSED_ST_EXIT'; status_emoji = '🚀'
+            reason_txt = "Supertrend Reversal Exit (Trend Flipped Bullish)"
 
+        # REMOVAL RULE: Target hit in any trade OR 3rd Attempt Completed
         remove_from_watchlist = tp1_done or (attempt_num >= 3)
 
         async with _lock:
@@ -452,7 +435,8 @@ async def check_paper_trades(client, df, symbol):
                 WATCHLIST.pop(symbol, None)
             else:
                 if symbol in WATCHLIST:
-                    WATCHLIST[symbol]['last_state'] = 'reset'
+                    # Keep state as 'short' so it forces waiting until price > Supertrend
+                    WATCHLIST[symbol]['last_state'] = 'short'
 
         await save_balance_data(client)
         await save_paper_trades(client)
@@ -504,7 +488,7 @@ async def bot1_scan(client: httpx.AsyncClient):
             print(f"Bot1 Scan Error: {e}", flush=True)
         await asyncio.sleep(60)
 
-# ===== PROCESS SYMBOL BOT 2 (GLITCH-PROOF STRICT CROSSOVER) =====
+# ===== PROCESS SYMBOL BOT 2 =====
 async def process_symbol(client, symbol):
     df = await get_klines(client, symbol)
     if df is None or len(df) < EMA_PERIOD + 2: return False
@@ -517,7 +501,6 @@ async def process_symbol(client, symbol):
     close_price = df['close'].iloc[-1]
     candle_low = df['low'].iloc[-1]
 
-    # Candle 1 Step Back (Completed 5-min candle)
     prev_close = df['close'].iloc[-2]
     prev_open = df['open'].iloc[-2]
     prev_ema = df['ema_val'].iloc[-2]
@@ -533,7 +516,7 @@ async def process_symbol(client, symbol):
         if symbol not in WATCHLIST: return False
 
         attempts_done = WATCHLIST[symbol].get('attempts', 0)
-        last_state = WATCHLIST[symbol].get('last_state', 'reset')
+        last_state = WATCHLIST[symbol].get('last_state', 'short')
         trigger_low = WATCHLIST[symbol].get('trigger_low', None)
 
         open_trade = PAPER_TRADES.get(symbol)
@@ -543,36 +526,36 @@ async def process_symbol(client, symbol):
         should_enter = False
         execution_entry_price = None
 
-        # --- GLITCH-FREE 1st ENTRY LOGIC ---
+        # ==========================================
+        # ATTEMPT #1 RULE: EMA 300 CROSS & BREAKOUT
+        # ==========================================
         if attempts_done == 0:
-            # TRUE CROSSOVER: Previous candle body completely crossed down below EMA 300
             is_true_crossover = (prev_open >= prev_ema or prev_close >= prev_ema) and (prev_close < prev_ema)
 
-            # STEP 1: LOCK FIRST CROSSOVER CANDLE LOW (If not locked yet)
             if trigger_low is None:
                 if is_true_crossover:
-                    # Lock previous completed candle's low
                     WATCHLIST[symbol]['trigger_low'] = prev_low
                     watchlist_changed = True
 
-            # STEP 2: BREAKOUT ENTRY CHECK
             else:
-                # ENTRY CONDITION: Current candle breaks below locked low & confirms below EMA
-                if candle_low < trigger_low and close_price < ema_val and not should_enter:
+                if candle_low < trigger_low and close_price < ema_val:
                     should_enter = True
                     execution_entry_price = trigger_low
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
 
-                # RESET LOCK ONLY ON BULLISH REVERSAL (Supertrend Reversal)
                 elif close_price > st_line:
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
 
-        # --- 2nd & 3rd ENTRY LOGIC ---
+        # ==========================================
+        # ATTEMPT #2 & #3 RULE: FRESH SUPERTREND RE-ENTRY
+        # ==========================================
         elif attempts_done in [1, 2]:
             price_below_st = close_price < st_line
             st_below_ema = st_line < ema_val
+            
+            # Requires last_state == 'reset' (Ensures price went above ST first)
             if price_below_st and st_below_ema and last_state == 'reset':
                 should_enter = True
                 execution_entry_price = close_price
@@ -603,7 +586,7 @@ async def process_symbol(client, symbol):
                 f"<b>Coin:</b> {symbol}\n"
                 f"<b>CoinDCX Pair:</b> <code>{get_coindcx_pair(symbol)}</code>\n"
                 f"<b>Entry Attempt:</b> #{current_attempt}/3\n"
-                f"<b>Confirmed Entry Price:</b> ${entry_price:.6f} (Breakout Level)\n"
+                f"<b>Confirmed Entry Price:</b> ${entry_price:.6f} ({'Breakout Level' if current_attempt == 1 else 'Re-Entry Level'})\n"
                 f"<b>Margin Amount:</b> ${trade_amount:.2f} (20%)\n"
                 f"<b>TP1 Target (-5%):</b> ${tp_price}\n"
                 f"<b>Max SL (+2%):</b> ${sl_price}\n"
@@ -612,8 +595,10 @@ async def process_symbol(client, symbol):
             new_entry = True
             watchlist_changed = True
 
+        # RESET STATE ONLY WHEN PRICE GOES ABOVE SUPERTREND
         if close_price > st_line:
             WATCHLIST[symbol]['last_state'] = 'reset'
+            watchlist_changed = True
 
         has_open_trade = PAPER_TRADES.get(symbol, {}).get('status') == 'OPEN'
         if time.time() - WATCHLIST[symbol]['time'] > WATCHLIST_DAYS * 86400 and not has_open_trade:
