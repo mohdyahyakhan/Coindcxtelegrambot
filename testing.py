@@ -144,7 +144,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Triple-Shield Market Guard Online)")
+    await update.message.reply_text("✅ Bot Active (v5.3 - Triple Shield + Exact Pip Breakout Guard)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -579,7 +579,7 @@ async def process_symbol(client, symbol):
         execution_entry_price = None
 
         # ==========================================
-        # ATTEMPT #1 RULE: EMA 300 CROSS & BREAKOUT
+        # ATTEMPT #1 RULE: EMA 300 CROSS & BREAKOUT (EXACT 1 PIP BREAKDOWN)
         # ==========================================
         if attempts_done == 0:
             is_true_crossover = (prev_open >= prev_ema or prev_close >= prev_ema) and (prev_close < prev_ema)
@@ -590,9 +590,21 @@ async def process_symbol(client, symbol):
                     watchlist_changed = True
 
             else:
+                # Rule: Candle Low MUST go strictly BELOW trigger_low
                 if candle_low < trigger_low and close_price < ema_val:
                     should_enter = True
-                    execution_entry_price = trigger_low
+                    
+                    # 1 Pip Offset Calculation based on price scale
+                    if trigger_low >= 100:
+                        pip_offset = 0.01
+                    elif trigger_low >= 1:
+                        pip_offset = 0.0001
+                    else:
+                        pip_offset = 0.000001  # e.g., $0.529200 -> $0.529199
+
+                    # EXACT ENTRY: Always 1 Pip strictly below trigger_low
+                    execution_entry_price = round(trigger_low - pip_offset, 6)
+                    
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
 
@@ -644,10 +656,10 @@ async def process_symbol(client, symbol):
                 f"<b>Coin:</b> {symbol}\n"
                 f"<b>CoinDCX Pair:</b> <code>{get_coindcx_pair(symbol)}</code>\n"
                 f"<b>Entry Attempt:</b> #{current_attempt}/3\n"
-                f"<b>Confirmed Entry Price:</b> ${entry_price:.6f} ({'Breakout Level' if current_attempt == 1 else 'Re-Entry Level'})\n"
+                f"<b>Confirmed Entry Price:</b> ${entry_price:.6f} ({'Breakout Level -1Pip' if current_attempt == 1 else 'Re-Entry Level'})\n"
                 f"<b>Margin Amount:</b> ${trade_amount:.2f} (20%)\n"
-                f"<b>TP1 Target (-5%):</b> ${tp_price}\n"
-                f"<b>Max SL (+2%):</b> ${sl_price}\n"
+                f"<b>TP1 Target (-5%):</b> ${tp_price:.6f}\n"
+                f"<b>Max SL (+2%):</b> ${sl_price:.6f}\n"
                 f"<b>Market Guard Status:</b> 🟢 SAFE\n"
                 f"<b>Runner Exit:</b> Candle Close > Supertrend Line"
             )
