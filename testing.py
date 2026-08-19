@@ -22,7 +22,7 @@ PUMP_PERCENT_24H = 40
 WATCHLIST_DAYS = 2
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
-EMA_PERIOD = 300        # 300 EMA
+EMA_PERIOD = 300        # 300 EMA for Altcoins
 RISK_PER_TRADE = 0.20   # 20% Margin
 MAX_OPEN_TRADES = 4     # Max 4 parallel trades
 MIN_VOLUME_24H = 2000000
@@ -46,6 +46,13 @@ PAPER_TRADES = {}
 TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 _lock = asyncio.Lock()
+
+# Global BTC Market Health Status
+BTC_HEALTH = {
+    "safe_to_short": True,
+    "last_updated": 0,
+    "reason": "Initializing"
+}
 
 BALANCE_DATA = {
     "total_balance": 10000.0,
@@ -137,7 +144,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (Multi-Attempt Rules Engine Online)")
+    await update.message.reply_text("✅ Bot Active (BTC Health Guard Online)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -173,7 +180,8 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
         active_qty = "50%" if trade.get('tp1_hit') else "100%"
         msg += f"<b>{symbol}</b> (CoinDCX: <code>{get_coindcx_pair(symbol)}</code>)\nAttempt: #{attempt}/3 | Entry: <code>${entry:.6f}</code>\nActive Qty: <code>{active_qty}</code> {tp1_status}\nTarget TP1: <code>${tp}</code> | SL Guard: <code>${sl:.6f}</code>\nMargin: <code>${amount:.2f}</code>\n\n"
-    msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
+    msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}\n"
+    msg += f"<b>BTC Guard Status:</b> {'🟢 SAFE FOR SHORTS' if BTC_HEALTH['safe_to_short'] else '🔴 BLOCKED (' + BTC_HEALTH['reason'] + ')'}"
     await update.message.reply_text(msg, parse_mode="HTML")
 
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -229,11 +237,11 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = BALANCE_DATA
     await update.message.reply_text(
-        f"📊 <b>ACCOUNT SUMMARY</b>\n\nStarting: ${bal['starting_balance']:.2f}\nCurrent Balance: ${bal['total_balance']:.2f}\nLifetime PnL: {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}",
+        f"📊 <b>ACCOUNT SUMMARY</b>\n\nStarting: ${bal['starting_balance']:.2f}\nCurrent Balance: ${bal['total_balance']:.2f}\nLifetime PnL: {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}\nBTC Guard Status: {'🟢 SHORTING ALLOWED' if BTC_HEALTH['safe_to_short'] else '🔴 SHORTS PAUSED'}",
         parse_mode="HTML"
     )
 
-# ===== MARKET DATA & INDICATOR ENGINE =====
+# ===== MARKET DATA ENGINE =====
 async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='5', limit=400):
     url = "https://api.bybit.com/v5/market/kline"
     bybit_symbol = symbol if symbol.endswith('USDT') else f"{symbol}USDT"
@@ -245,7 +253,7 @@ async def get_klines_bybit_async(client: httpx.AsyncClient, symbol, interval='5'
             df = pd.DataFrame(data['result']['list'], columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'turnover'])
             df = df.astype({'timestamp': 'int64', 'open': float, 'high': float, 'low': float, 'close': float})
             df = df.iloc[::-1].reset_index(drop=True).iloc[:-1].reset_index(drop=True)
-            if len(df) < EMA_PERIOD + 50: return None
+            if len(df) < 50: return None
             return df
     except: pass
     return None
@@ -262,15 +270,49 @@ async def get_klines_coindcx_async(client: httpx.AsyncClient, symbol, interval='
         df['timestamp'] = df['timestamp'].astype('int64')
         df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].astype(float)
         df = df[['timestamp', 'open', 'high', 'low', 'close']].sort_values('timestamp').reset_index(drop=True).iloc[:-1].reset_index(drop=True)
-        if len(df) < EMA_PERIOD + 50: return None
+        if len(df) < 50: return None
         return df
     except: pass
     return None
 
-async def get_klines(client, symbol):
-    df = await get_klines_bybit_async(client, symbol)
+async def get_klines(client, symbol, interval='5', limit=400):
+    df = await get_klines_bybit_async(client, symbol, interval, limit)
     if df is not None: return df
-    return await get_klines_coindcx_async(client, symbol)
+    return await get_klines_coindcx_async(client, symbol, interval, limit)
+
+# ===== BTC INSTITUTIONAL HEALTH CHECK =====
+async def update_btc_health(client: httpx.AsyncClient):
+    global BTC_HEALTH
+    try:
+        # Fetch BTC 1-Hour Klines for Trend Filter
+        df_1h = await get_klines(client, "BTCUSDT", interval='60', limit=100)
+        if df_1h is None or len(df_1h) < 50: return
+
+        ema20 = df_1h['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+        ema50 = df_1h['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        btc_price = df_1h['close'].iloc[-1]
+
+        # Fetch BTC 15-Min Klines for Sudden Volatility Pump Filter
+        df_15m = await get_klines(client, "BTCUSDT", interval='15', limit=10)
+        if df_15m is None or len(df_15m) < 4: return
+
+        btc_15m_change = ((df_15m['close'].iloc[-1] - df_15m['open'].iloc[-2]) / df_15m['open'].iloc[-2]) * 100
+
+        # FILTER 1: Strict BTC Bearish Trend Check (AND logic applied for safety)
+        is_bearish_trend = (btc_price < ema20) and (ema20 < ema50)
+        
+        # FILTER 2: Volatility Surge Guard (If BTC jumped >= +1.8% in last 30 mins -> Block Shorts)
+        is_pumping_hard = btc_15m_change >= 1.8
+
+        if is_pumping_hard:
+            BTC_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": f"BTC 15m Surge (+{btc_15m_change:.2f}%)"}
+        elif not is_bearish_trend:
+            BTC_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": "BTC 1H Trend is Bullish/Neutral"}
+        else:
+            BTC_HEALTH = {"safe_to_short": True, "last_updated": time.time(), "reason": "BTC Trend Strictly Bearish (Ideal for Shorts)"}
+
+    except Exception as e:
+        print(f"BTC Health Check Error: {e}", flush=True)
 
 def calculate_supertrend(df, period=10, multiplier=3):
     df = df.copy()
@@ -401,7 +443,6 @@ async def check_paper_trades(client, df, symbol):
             exit_price = candle_close; status_code = 'CLOSED_ST_EXIT'; status_emoji = '🚀'
             reason_txt = "Supertrend Reversal Exit (Trend Flipped Bullish)"
 
-        # REMOVAL RULE: Target hit in any trade OR 3rd Attempt Completed
         remove_from_watchlist = tp1_done or (attempt_num >= 3)
 
         async with _lock:
@@ -435,7 +476,6 @@ async def check_paper_trades(client, df, symbol):
                 WATCHLIST.pop(symbol, None)
             else:
                 if symbol in WATCHLIST:
-                    # Keep state as 'short' so it forces waiting until price > Supertrend
                     WATCHLIST[symbol]['last_state'] = 'short'
 
         await save_balance_data(client)
@@ -555,12 +595,18 @@ async def process_symbol(client, symbol):
             price_below_st = close_price < st_line
             st_below_ema = st_line < ema_val
             
-            # Requires last_state == 'reset' (Ensures price went above ST first)
             if price_below_st and st_below_ema and last_state == 'reset':
                 should_enter = True
                 execution_entry_price = close_price
 
-        # EXECUTE ENTRY IF CONDITIONS MET
+        # ==========================================
+        # BTC HEALTH GUARD: CHECK BEFORE ENTRY
+        # ==========================================
+        if should_enter and not BTC_HEALTH['safe_to_short']:
+            print(f"🛑 [BTC GUARD] Entry blocked for {symbol}. Reason: {BTC_HEALTH['reason']}", flush=True)
+            should_enter = False  # Block trade execution if BTC is Bullish/Pumping
+
+        # EXECUTE ENTRY IF ALL CONDITIONS PASSED
         if should_enter and attempts_done < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
             entry_price = round(execution_entry_price, 6)
             tp_price = round(entry_price * (1 - TARGET_TP_PERCENT), 6)
@@ -590,6 +636,7 @@ async def process_symbol(client, symbol):
                 f"<b>Margin Amount:</b> ${trade_amount:.2f} (20%)\n"
                 f"<b>TP1 Target (-5%):</b> ${tp_price}\n"
                 f"<b>Max SL (+2%):</b> ${sl_price}\n"
+                f"<b>BTC Health Status:</b> 🟢 SAFE\n"
                 f"<b>Runner Exit:</b> Candle Close > Supertrend Line"
             )
             new_entry = True
@@ -615,6 +662,10 @@ async def bot2_scan(client: httpx.AsyncClient):
     print("Bot2: Started", flush=True)
     while True:
         try:
+            # 1. Update BTC Health Check Once Per Scan Loop
+            await update_btc_health(client)
+
+            # 2. Process Watchlist Coins
             async with _lock: symbols_to_scan = list(WATCHLIST.keys())
             if not symbols_to_scan:
                 await asyncio.sleep(20)
@@ -630,7 +681,12 @@ async def bot2_scan(client: httpx.AsyncClient):
 
 # ===== SERVER & MAIN APP =====
 @app.route('/')
-def home(): return jsonify({"status": "Bot Running", "watchlist_count": len(WATCHLIST)})
+def home(): 
+    return jsonify({
+        "status": "Bot Running", 
+        "watchlist_count": len(WATCHLIST),
+        "btc_health": BTC_HEALTH
+    })
 
 async def main_async():
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
