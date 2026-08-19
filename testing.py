@@ -47,8 +47,8 @@ TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
 _lock = asyncio.Lock()
 
-# Global BTC Market Health Status
-BTC_HEALTH = {
+# ===== GLOBAL TRIPLE SHIELD MARKET HEALTH =====
+MARKET_HEALTH = {
     "safe_to_short": True,
     "last_updated": 0,
     "reason": "Initializing"
@@ -144,7 +144,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (BTC Health Guard Online)")
+    await update.message.reply_text("✅ Bot Active (Triple-Shield Market Guard Online)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -181,7 +181,7 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         active_qty = "50%" if trade.get('tp1_hit') else "100%"
         msg += f"<b>{symbol}</b> (CoinDCX: <code>{get_coindcx_pair(symbol)}</code>)\nAttempt: #{attempt}/3 | Entry: <code>${entry:.6f}</code>\nActive Qty: <code>{active_qty}</code> {tp1_status}\nTarget TP1: <code>${tp}</code> | SL Guard: <code>${sl:.6f}</code>\nMargin: <code>${amount:.2f}</code>\n\n"
     msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}\n"
-    msg += f"<b>BTC Guard Status:</b> {'🟢 SAFE FOR SHORTS' if BTC_HEALTH['safe_to_short'] else '🔴 BLOCKED (' + BTC_HEALTH['reason'] + ')'}"
+    msg += f"<b>Market Guard Status:</b> {'🟢 SAFE FOR SHORTS' if MARKET_HEALTH['safe_to_short'] else '🔴 BLOCKED (' + MARKET_HEALTH['reason'] + ')'}"
     await update.message.reply_text(msg, parse_mode="HTML")
 
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -237,7 +237,7 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = BALANCE_DATA
     await update.message.reply_text(
-        f"📊 <b>ACCOUNT SUMMARY</b>\n\nStarting: ${bal['starting_balance']:.2f}\nCurrent Balance: ${bal['total_balance']:.2f}\nLifetime PnL: {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}\nBTC Guard Status: {'🟢 SHORTING ALLOWED' if BTC_HEALTH['safe_to_short'] else '🔴 SHORTS PAUSED'}",
+        f"📊 <b>ACCOUNT SUMMARY</b>\n\nStarting: ${bal['starting_balance']:.2f}\nCurrent Balance: ${bal['total_balance']:.2f}\nLifetime PnL: {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}\nMarket Guard Status: {'🟢 SHORTING ALLOWED' if MARKET_HEALTH['safe_to_short'] else '🔴 SHORTS PAUSED (' + MARKET_HEALTH['reason'] + ')'}",
         parse_mode="HTML"
     )
 
@@ -280,39 +280,51 @@ async def get_klines(client, symbol, interval='5', limit=400):
     if df is not None: return df
     return await get_klines_coindcx_async(client, symbol, interval, limit)
 
-# ===== BTC INSTITUTIONAL HEALTH CHECK =====
-async def update_btc_health(client: httpx.AsyncClient):
-    global BTC_HEALTH
+# ===== INSTITUTIONAL TRIPLE SHIELD MARKET HEALTH CHECK =====
+async def update_market_health(client: httpx.AsyncClient):
+    global MARKET_HEALTH
     try:
-        # Fetch BTC 1-Hour Klines for Trend Filter
-        df_1h = await get_klines(client, "BTCUSDT", interval='60', limit=100)
-        if df_1h is None or len(df_1h) < 50: return
+        # 1. BTC 1H Trend + 15m Surge Check
+        df_btc_1h = await get_klines(client, "BTCUSDT", interval='60', limit=100)
+        df_btc_15m = await get_klines(client, "BTCUSDT", interval='15', limit=10)
+        if df_btc_1h is None or df_btc_15m is None or len(df_btc_1h) < 50 or len(df_btc_15m) < 4: return
 
-        ema20 = df_1h['close'].ewm(span=20, adjust=False).mean().iloc[-1]
-        ema50 = df_1h['close'].ewm(span=50, adjust=False).mean().iloc[-1]
-        btc_price = df_1h['close'].iloc[-1]
+        btc_price = df_btc_1h['close'].iloc[-1]
+        btc_ema20 = df_btc_1h['close'].ewm(span=20, adjust=False).mean().iloc[-1]
+        btc_ema50 = df_btc_1h['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+        btc_15m_change = ((df_btc_15m['close'].iloc[-1] - df_btc_15m['open'].iloc[-2]) / df_btc_15m['open'].iloc[-2]) * 100
 
-        # Fetch BTC 15-Min Klines for Sudden Volatility Pump Filter
-        df_15m = await get_klines(client, "BTCUSDT", interval='15', limit=10)
-        if df_15m is None or len(df_15m) < 4: return
+        is_btc_bearish = (btc_price < btc_ema20) and (btc_ema20 < btc_ema50)
+        is_btc_pumping = btc_15m_change >= 1.8
 
-        btc_15m_change = ((df_15m['close'].iloc[-1] - df_15m['open'].iloc[-2]) / df_15m['open'].iloc[-2]) * 100
+        # 2. ETH 15m Surge Check
+        df_eth_15m = await get_klines(client, "ETHUSDT", interval='15', limit=10)
+        is_eth_pumping = False
+        if df_eth_15m is not None and len(df_eth_15m) >= 4:
+            eth_15m_change = ((df_eth_15m['close'].iloc[-1] - df_eth_15m['open'].iloc[-2]) / df_eth_15m['open'].iloc[-2]) * 100
+            is_eth_pumping = eth_15m_change >= 2.0
 
-        # FILTER 1: Strict BTC Bearish Trend Check (AND logic applied for safety)
-        is_bearish_trend = (btc_price < ema20) and (ema20 < ema50)
-        
-        # FILTER 2: Volatility Surge Guard (If BTC jumped >= +1.8% in last 30 mins -> Block Shorts)
-        is_pumping_hard = btc_15m_change >= 1.8
+        # 3. SOL 15m Surge Check (Altseason High-Beta Surge Proxy)
+        df_sol_15m = await get_klines(client, "SOLUSDT", interval='15', limit=10)
+        is_sol_pumping = False
+        if df_sol_15m is not None and len(df_sol_15m) >= 4:
+            sol_15m_change = ((df_sol_15m['close'].iloc[-1] - df_sol_15m['open'].iloc[-2]) / df_sol_15m['open'].iloc[-2]) * 100
+            is_sol_pumping = sol_15m_change >= 2.5
 
-        if is_pumping_hard:
-            BTC_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": f"BTC 15m Surge (+{btc_15m_change:.2f}%)"}
-        elif not is_bearish_trend:
-            BTC_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": "BTC 1H Trend is Bullish/Neutral"}
+        # ===== COMBINED DECISION TREE =====
+        if is_eth_pumping:
+            MARKET_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": f"ETH 15m Surge (+{eth_15m_change:.2f}%)"}
+        elif is_sol_pumping:
+            MARKET_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": f"SOL 15m Surge (+{sol_15m_change:.2f}%)"}
+        elif is_btc_pumping:
+            MARKET_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": f"BTC 15m Surge (+{btc_15m_change:.2f}%)"}
+        elif not is_btc_bearish:
+            MARKET_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": "BTC 1H Trend is Bullish/Neutral"}
         else:
-            BTC_HEALTH = {"safe_to_short": True, "last_updated": time.time(), "reason": "BTC Trend Strictly Bearish (Ideal for Shorts)"}
+            MARKET_HEALTH = {"safe_to_short": True, "last_updated": time.time(), "reason": "BTC Bearish + ETH/SOL Calm"}
 
     except Exception as e:
-        print(f"BTC Health Check Error: {e}", flush=True)
+        print(f"Market Health Check Error: {e}", flush=True)
 
 def calculate_supertrend(df, period=10, multiplier=3):
     df = df.copy()
@@ -600,11 +612,11 @@ async def process_symbol(client, symbol):
                 execution_entry_price = close_price
 
         # ==========================================
-        # BTC HEALTH GUARD: CHECK BEFORE ENTRY
+        # TRIPLE SHIELD MARKET GUARD CHECK
         # ==========================================
-        if should_enter and not BTC_HEALTH['safe_to_short']:
-            print(f"🛑 [BTC GUARD] Entry blocked for {symbol}. Reason: {BTC_HEALTH['reason']}", flush=True)
-            should_enter = False  # Block trade execution if BTC is Bullish/Pumping
+        if should_enter and not MARKET_HEALTH['safe_to_short']:
+            print(f"🛑 [MARKET GUARD] Entry blocked for {symbol}. Reason: {MARKET_HEALTH['reason']}", flush=True)
+            should_enter = False
 
         # EXECUTE ENTRY IF ALL CONDITIONS PASSED
         if should_enter and attempts_done < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
@@ -636,7 +648,7 @@ async def process_symbol(client, symbol):
                 f"<b>Margin Amount:</b> ${trade_amount:.2f} (20%)\n"
                 f"<b>TP1 Target (-5%):</b> ${tp_price}\n"
                 f"<b>Max SL (+2%):</b> ${sl_price}\n"
-                f"<b>BTC Health Status:</b> 🟢 SAFE\n"
+                f"<b>Market Guard Status:</b> 🟢 SAFE\n"
                 f"<b>Runner Exit:</b> Candle Close > Supertrend Line"
             )
             new_entry = True
@@ -662,8 +674,8 @@ async def bot2_scan(client: httpx.AsyncClient):
     print("Bot2: Started", flush=True)
     while True:
         try:
-            # 1. Update BTC Health Check Once Per Scan Loop
-            await update_btc_health(client)
+            # 1. Update Triple Shield Market Health Status
+            await update_market_health(client)
 
             # 2. Process Watchlist Coins
             async with _lock: symbols_to_scan = list(WATCHLIST.keys())
@@ -685,7 +697,7 @@ def home():
     return jsonify({
         "status": "Bot Running", 
         "watchlist_count": len(WATCHLIST),
-        "btc_health": BTC_HEALTH
+        "market_health": MARKET_HEALTH
     })
 
 async def main_async():
