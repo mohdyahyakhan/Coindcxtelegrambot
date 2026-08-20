@@ -144,7 +144,7 @@ async def send_telegram(client: httpx.AsyncClient, message):
 
 # ===== TELEGRAM COMMAND HANDLERS =====
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot Active (v5.3 - Triple Shield + Exact Pip Breakout Guard)")
+    await update.message.reply_text("✅ Bot Active (v5.4 - Candle-Low Dynamic Trailing SL + 1-Pip Breakout)")
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args:
@@ -176,12 +176,13 @@ async def open_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = f"📊 <b>OPEN TRADES ({len(open_trades_list)}/{MAX_OPEN_TRADES})</b>\n\n"
     for symbol, trade in open_trades_list.items():
         entry = trade['entry']; tp = trade['tp']; sl = trade['sl']; attempt = trade.get('attempt', 1)
-        tp1_status = "🎯 (50% TP BOOKED - BREAK-EVEN ACTIVE)" if trade.get('tp1_hit') else ""
+        tp1_status = "🎯 (50% TP BOOKED - TRAILING ACTIVE)" if trade.get('tp1_hit') else ""
         amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
         active_qty = "50%" if trade.get('tp1_hit') else "100%"
-        msg += f"<b>{symbol}</b> (CoinDCX: <code>{get_coindcx_pair(symbol)}</code>)\nAttempt: #{attempt}/3 | Entry: <code>${entry:.6f}</code>\nActive Qty: <code>{active_qty}</code> {tp1_status}\nTarget TP1: <code>${tp}</code> | SL Guard: <code>${sl:.6f}</code>\nMargin: <code>${amount:.2f}</code>\n\n"
+        st_rule_txt = "Supertrend Exit + Trailing SL" if attempt == 1 else "Pure Trailing SL"
+        msg += f"<b>{symbol}</b> (CoinDCX: <code>{get_coindcx_pair(symbol)}</code>)\nAttempt: #{attempt}/3 ({st_rule_txt})\nEntry: <code>${entry:.6f}</code> | Qty: <code>{active_qty}</code> {tp1_status}\nTarget TP1: <code>${tp:.6f}</code> | Current SL: <code>${sl:.6f}</code>\nMargin: <code>${amount:.2f}</code>\n\n"
     msg += f"<b>Total Balance:</b> ${BALANCE_DATA['total_balance']:.2f}\n"
-    msg += f"<b>Market Guard Status:</b> {'🟢 SAFE FOR SHORTS' if MARKET_HEALTH['safe_to_short'] else '🔴 BLOCKED (' + MARKET_HEALTH['reason'] + ')'}"
+    msg += f"<b>Market Guard:</b> {'🟢 SAFE' if MARKET_HEALTH['safe_to_short'] else '🔴 PAUSED (' + MARKET_HEALTH['reason'] + ')'}"
     await update.message.reply_text(msg, parse_mode="HTML")
 
 async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -231,13 +232,13 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await save_balance_data(client)
             await save_watchlist(client)
 
-        msg = f"🔄 <b>MANUAL TRADE CLOSED</b>\n\n<b>Coin:</b> {symbol}\n<b>Closed Qty:</b> {'50%' if tp1_done else '100%'}\n<b>Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n🗑️ Removed from Watchlist"
+        msg = f"🔄 <b>MANUAL CLOSE</b>\n\n<b>Coin:</b> {symbol}\n<b>Qty Closed:</b> {'50%' if tp1_done else '100%'}\n<b>Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n🗑️ Removed from Watchlist"
         return await update.message.reply_text(msg, parse_mode="HTML")
 
 async def pnl_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bal = BALANCE_DATA
     await update.message.reply_text(
-        f"📊 <b>ACCOUNT SUMMARY</b>\n\nStarting: ${bal['starting_balance']:.2f}\nCurrent Balance: ${bal['total_balance']:.2f}\nLifetime PnL: {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}\nMarket Guard Status: {'🟢 SHORTING ALLOWED' if MARKET_HEALTH['safe_to_short'] else '🔴 SHORTS PAUSED (' + MARKET_HEALTH['reason'] + ')'}",
+        f"📊 <b>ACCOUNT SUMMARY</b>\n\nStarting: ${bal['starting_balance']:.2f}\nCurrent Balance: ${bal['total_balance']:.2f}\nLifetime PnL: {bal['lifetime_pnl_percent']:.2f}% / ${bal['lifetime_pnl_usdt']:.2f}\nMarket Guard: {'🟢 SAFE' if MARKET_HEALTH['safe_to_short'] else '🔴 PAUSED (' + MARKET_HEALTH['reason'] + ')'}",
         parse_mode="HTML"
     )
 
@@ -280,11 +281,10 @@ async def get_klines(client, symbol, interval='5', limit=400):
     if df is not None: return df
     return await get_klines_coindcx_async(client, symbol, interval, limit)
 
-# ===== INSTITUTIONAL TRIPLE SHIELD MARKET HEALTH CHECK =====
+# ===== TRIPLE SHIELD MARKET HEALTH =====
 async def update_market_health(client: httpx.AsyncClient):
     global MARKET_HEALTH
     try:
-        # 1. BTC 1H Trend + 15m Surge Check
         df_btc_1h = await get_klines(client, "BTCUSDT", interval='60', limit=100)
         df_btc_15m = await get_klines(client, "BTCUSDT", interval='15', limit=10)
         if df_btc_1h is None or df_btc_15m is None or len(df_btc_1h) < 50 or len(df_btc_15m) < 4: return
@@ -297,21 +297,18 @@ async def update_market_health(client: httpx.AsyncClient):
         is_btc_bearish = (btc_price < btc_ema20) and (btc_ema20 < btc_ema50)
         is_btc_pumping = btc_15m_change >= 1.8
 
-        # 2. ETH 15m Surge Check
         df_eth_15m = await get_klines(client, "ETHUSDT", interval='15', limit=10)
         is_eth_pumping = False
         if df_eth_15m is not None and len(df_eth_15m) >= 4:
             eth_15m_change = ((df_eth_15m['close'].iloc[-1] - df_eth_15m['open'].iloc[-2]) / df_eth_15m['open'].iloc[-2]) * 100
             is_eth_pumping = eth_15m_change >= 2.0
 
-        # 3. SOL 15m Surge Check (Altseason High-Beta Surge Proxy)
         df_sol_15m = await get_klines(client, "SOLUSDT", interval='15', limit=10)
         is_sol_pumping = False
         if df_sol_15m is not None and len(df_sol_15m) >= 4:
             sol_15m_change = ((df_sol_15m['close'].iloc[-1] - df_sol_15m['open'].iloc[-2]) / df_sol_15m['open'].iloc[-2]) * 100
             is_sol_pumping = sol_15m_change >= 2.5
 
-        # ===== COMBINED DECISION TREE =====
         if is_eth_pumping:
             MARKET_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": f"ETH 15m Surge (+{eth_15m_change:.2f}%)"}
         elif is_sol_pumping:
@@ -319,7 +316,7 @@ async def update_market_health(client: httpx.AsyncClient):
         elif is_btc_pumping:
             MARKET_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": f"BTC 15m Surge (+{btc_15m_change:.2f}%)"}
         elif not is_btc_bearish:
-            MARKET_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": "BTC 1H Trend is Bullish/Neutral"}
+            MARKET_HEALTH = {"safe_to_short": False, "last_updated": time.time(), "reason": "BTC 1H Bullish/Neutral"}
         else:
             MARKET_HEALTH = {"safe_to_short": True, "last_updated": time.time(), "reason": "BTC Bearish + ETH/SOL Calm"}
 
@@ -377,29 +374,30 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['ema_val'] = ema_300.rolling(window=9, min_periods=1).mean()
     return df
 
-# ===== TRADE MANAGEMENT & EXITS =====
+# ===== TRADE MANAGEMENT & EXITS (v5.4 CANDLE-LOW TRAILING) =====
 async def check_paper_trades(client, df, symbol):
     global BALANCE_DATA
     async with _lock:
         if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status'] != 'OPEN': return
         trade = PAPER_TRADES[symbol].copy()
 
-    if time.time() - trade.get('time', 0) < 15:
-        return
+    if time.time() - trade.get('time', 0) < 15: return
 
     candle_low = df['low'].iloc[-1]
     candle_high = df['high'].iloc[-1]
     candle_close = df['close'].iloc[-1]
     st_line = df['st_line'].iloc[-1]
+    entry = trade['entry']
+    attempt_num = trade.get('attempt', 1)
 
-    # 1. PARTIAL TP1 HIT (-5% TARGET -> CLOSE 50% QUANTITY & LOCK BREAK-EVEN SL)
+    # 1. PARTIAL TP1 HIT (-5% TARGET -> BOOK 50% & SL = BREAK EVEN)
     if candle_low <= trade['tp'] and not trade.get('tp1_hit'):
         partial_ratio = 0.5
         trade_amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
         partial_amount = trade_amount * partial_ratio
         exit_price = trade['tp']
 
-        gross_pnl_percent = ((trade['entry'] - exit_price) / trade['entry']) * 100
+        gross_pnl_percent = ((entry - exit_price) / entry) * 100
         gross_pnl_usdt = partial_amount * (gross_pnl_percent / 100)
 
         entry_value = partial_amount
@@ -418,39 +416,73 @@ async def check_paper_trades(client, df, symbol):
                 BALANCE_DATA['lifetime_pnl_percent'] = (BALANCE_DATA['lifetime_pnl_usdt'] / BALANCE_DATA['starting_balance']) * 100
 
                 PAPER_TRADES[symbol]['tp1_hit'] = True
-                PAPER_TRADES[symbol]['sl'] = trade['entry']
-                PAPER_TRADES[symbol]['is_breakeven'] = True
-
+                PAPER_TRADES[symbol]['sl'] = entry
+                PAPER_TRADES[symbol]['max_favorable_pnl_pct'] = 5.0
+                
                 trade['tp1_hit'] = True
-                trade['sl'] = trade['entry']
-                trade['is_breakeven'] = True
+                trade['sl'] = entry
+                trade['max_favorable_pnl_pct'] = 5.0
 
         await save_balance_data(client)
         await save_paper_trades(client)
 
+        runner_type = "Supertrend Exit + Trailing SL" if attempt_num == 1 else "Pure Trailing SL"
         msg = (
-            f"🎯 <b>50% PARTIAL TP HIT (-5%)</b> 🎯\n\n"
+            f"🎯 <b>50% TP1 BOOKED (-5%)</b> 🎯\n\n"
             f"<b>Coin:</b> {symbol} (<code>{get_coindcx_pair(symbol)}</code>)\n"
-            f"<b>Booked Profit (50% Qty):</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n"
-            f"<b>Remaining 50% Status:</b> Riding Trend Until Supertrend Reversal\n"
-            f"<b>SL Guard:</b> Break-Even (${trade['entry']:.6f})\n"
-            f"<b>Current Balance:</b> ${BALANCE_DATA['total_balance']:.2f}"
+            f"<b>Attempt:</b> #{attempt_num}/3\n"
+            f"<b>Net Profit:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n"
+            f"<b>SL Shifted To:</b> Break-Even (${entry:.6f})\n"
+            f"<b>Runner Strategy:</b> {runner_type}"
         )
         asyncio.create_task(send_telegram(client, msg))
 
-    # 2. RUNNER EXIT CONDITIONS
+    # 1.5 DYNAMIC TRAILING AFTER TP1 (BASED ON CANDLE LOW - RATCHET STEP)
+    if trade.get('tp1_hit'):
+        max_drop_pct = ((entry - candle_low) / entry) * 100
+        prev_max_pnl = trade.get('max_favorable_pnl_pct', 5.0)
+
+        if max_drop_pct > prev_max_pnl:
+            steps_gained = math.floor(max_drop_pct - 5.0)
+            if steps_gained > math.floor(prev_max_pnl - 5.0):
+                target_locked_profit = steps_gained * 1.0  # Lock 1% for every 1% drop below -5%
+                new_sl_price = round(entry * (1 - target_locked_profit / 100.0), 6)
+
+                # Ratchet Lock: SL strictly lowers for short trades
+                if new_sl_price < trade['sl']:
+                    async with _lock:
+                        if symbol in PAPER_TRADES and PAPER_TRADES[symbol]['status'] == 'OPEN':
+                            PAPER_TRADES[symbol]['sl'] = new_sl_price
+                            PAPER_TRADES[symbol]['max_favorable_pnl_pct'] = max_drop_pct
+                            trade['sl'] = new_sl_price
+                            trade['max_favorable_pnl_pct'] = max_drop_pct
+
+                    await save_paper_trades(client)
+                    msg = (
+                        f"🔒 <b>DYNAMIC TRAILING SL UPDATE</b>\n\n"
+                        f"<b>Coin:</b> {symbol}\n"
+                        f"<b>Max Drop (Wick Low):</b> -{max_drop_pct:.2f}%\n"
+                        f"<b>Profit Locked:</b> -{target_locked_profit:.2f}%\n"
+                        f"<b>New SL Price:</b> ${new_sl_price:.6f}"
+                    )
+                    asyncio.create_task(send_telegram(client, msg))
+
+    # 2. RUNNER EXITS
     sl_hit = candle_high >= trade['sl']
     is_trend_green = (st_line < candle_close)
-    st_exit = is_trend_green or (candle_close > st_line)
+    st_exit = (attempt_num == 1) and (is_trend_green or (candle_close > st_line))
 
     if sl_hit or st_exit:
-        attempt_num = trade.get('attempt', 1)
         tp1_done = trade.get('tp1_hit', False)
         remaining_ratio = 0.5 if tp1_done else 1.0
 
         if sl_hit:
             exit_price = trade['sl']; status_code = 'CLOSED_SL'; status_emoji = '🛡️' if tp1_done else '❌'
-            reason_txt = "Break-Even SL Hit" if tp1_done else f"Emergency Max SL Hit ({EMERGENCY_SL_PERCENT*100:.1f}%)"
+            if tp1_done:
+                sl_profit_pct = ((entry - trade['sl']) / entry) * 100
+                reason_txt = f"Trailing SL Hit (Locked {sl_profit_pct:.1f}% Profit)" if sl_profit_pct > 0 else "Break-Even SL Hit"
+            else:
+                reason_txt = f"Emergency Hard SL Hit ({EMERGENCY_SL_PERCENT*100:.1f}%)"
         else:
             exit_price = candle_close; status_code = 'CLOSED_ST_EXIT'; status_emoji = '🚀'
             reason_txt = "Supertrend Reversal Exit (Trend Flipped Bullish)"
@@ -463,7 +495,7 @@ async def check_paper_trades(client, df, symbol):
             trade_amount = trade.get('trade_amount_usdt', trade['balance_at_entry'] * RISK_PER_TRADE)
             remaining_amount = trade_amount * remaining_ratio
 
-            gross_pnl_percent = ((trade['entry'] - exit_price) / trade['entry']) * 100
+            gross_pnl_percent = ((entry - exit_price) / entry) * 100
             gross_pnl_usdt = remaining_amount * (gross_pnl_percent / 100)
 
             entry_value = remaining_amount
@@ -497,10 +529,11 @@ async def check_paper_trades(client, df, symbol):
         msg = (
             f"{status_emoji} <b>PAPER TRADE FULLY CLOSED</b> {status_emoji}\n\n"
             f"<b>Coin:</b> {symbol} (<code>{get_coindcx_pair(symbol)}</code>)\n"
+            f"<b>Attempt:</b> #{attempt_num}/3\n"
             f"<b>Reason:</b> {reason_txt}\n"
             f"<b>Closed Portion:</b> {'Remaining 50%' if tp1_done else '100%'}\n"
             f"<b>Exit Price:</b> ${exit_price:.6f}\n"
-            f"<b>Portion Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n"
+            f"<b>Net PnL:</b> {net_pnl_percent:.2f}% / ${net_pnl_usdt:.2f}\n"
             f"<b>Total Balance:</b> ${trade_snapshot_balance:.2f}"
         )
         if remove_from_watchlist: msg += f"\n\n🗑️ <b>{symbol} removed from watchlist</b>"
@@ -579,7 +612,7 @@ async def process_symbol(client, symbol):
         execution_entry_price = None
 
         # ==========================================
-        # ATTEMPT #1 RULE: EMA 300 CROSS & BREAKOUT (EXACT 1 PIP BREAKDOWN)
+        # ATTEMPT #1: EXACT 1-PIP BREAKDOWN BELOW TRIGGER LOW
         # ==========================================
         if attempts_done == 0:
             is_true_crossover = (prev_open >= prev_ema or prev_close >= prev_ema) and (prev_close < prev_ema)
@@ -588,23 +621,15 @@ async def process_symbol(client, symbol):
                 if is_true_crossover:
                     WATCHLIST[symbol]['trigger_low'] = prev_low
                     watchlist_changed = True
-
             else:
-                # Rule: Candle Low MUST go strictly BELOW trigger_low
                 if candle_low < trigger_low and close_price < ema_val:
                     should_enter = True
                     
-                    # 1 Pip Offset Calculation based on price scale
-                    if trigger_low >= 100:
-                        pip_offset = 0.01
-                    elif trigger_low >= 1:
-                        pip_offset = 0.0001
-                    else:
-                        pip_offset = 0.000001  # e.g., $0.529200 -> $0.529199
+                    if trigger_low >= 100: pip_offset = 0.01
+                    elif trigger_low >= 1: pip_offset = 0.0001
+                    else: pip_offset = 0.000001
 
-                    # EXACT ENTRY: Always 1 Pip strictly below trigger_low
                     execution_entry_price = round(trigger_low - pip_offset, 6)
-                    
                     WATCHLIST[symbol]['trigger_low'] = None
                     watchlist_changed = True
 
@@ -613,7 +638,7 @@ async def process_symbol(client, symbol):
                     watchlist_changed = True
 
         # ==========================================
-        # ATTEMPT #2 & #3 RULE: FRESH SUPERTREND RE-ENTRY
+        # ATTEMPT #2 & #3: FRESH SUPERTREND RE-ENTRY
         # ==========================================
         elif attempts_done in [1, 2]:
             price_below_st = close_price < st_line
@@ -624,13 +649,11 @@ async def process_symbol(client, symbol):
                 execution_entry_price = close_price
 
         # ==========================================
-        # TRIPLE SHIELD MARKET GUARD CHECK
+        # TRIPLE SHIELD GUARD CHECK
         # ==========================================
         if should_enter and not MARKET_HEALTH['safe_to_short']:
-            print(f"🛑 [MARKET GUARD] Entry blocked for {symbol}. Reason: {MARKET_HEALTH['reason']}", flush=True)
             should_enter = False
 
-        # EXECUTE ENTRY IF ALL CONDITIONS PASSED
         if should_enter and attempts_done < 3 and not open_trade_exists and active_open_trades < MAX_OPEN_TRADES:
             entry_price = round(execution_entry_price, 6)
             tp_price = round(entry_price * (1 - TARGET_TP_PERCENT), 6)
@@ -647,26 +670,27 @@ async def process_symbol(client, symbol):
                 'balance_at_entry': BALANCE_DATA['total_balance'],
                 'trade_amount_usdt': trade_amount,
                 'attempt': current_attempt,
-                'is_breakeven': False,
+                'max_favorable_pnl_pct': 0.0,
                 'tp1_hit': False
             }
+
+            runner_exit_type = "Supertrend Exit + Dynamic Trailing SL" if current_attempt == 1 else "Pure Dynamic Trailing SL"
 
             msg_to_send = (
                 f"📝 <b>PAPER SHORT ENTRY</b> 📝\n\n"
                 f"<b>Coin:</b> {symbol}\n"
                 f"<b>CoinDCX Pair:</b> <code>{get_coindcx_pair(symbol)}</code>\n"
                 f"<b>Entry Attempt:</b> #{current_attempt}/3\n"
-                f"<b>Confirmed Entry Price:</b> ${entry_price:.6f} ({'Breakout Level -1Pip' if current_attempt == 1 else 'Re-Entry Level'})\n"
-                f"<b>Margin Amount:</b> ${trade_amount:.2f} (20%)\n"
+                f"<b>Confirmed Entry:</b> ${entry_price:.6f}\n"
+                f"<b>Margin:</b> ${trade_amount:.2f} (20%)\n"
                 f"<b>TP1 Target (-5%):</b> ${tp_price:.6f}\n"
                 f"<b>Max SL (+2%):</b> ${sl_price:.6f}\n"
-                f"<b>Market Guard Status:</b> 🟢 SAFE\n"
-                f"<b>Runner Exit:</b> Candle Close > Supertrend Line"
+                f"<b>Market Guard:</b> 🟢 SAFE\n"
+                f"<b>Runner Type:</b> {runner_exit_type}"
             )
             new_entry = True
             watchlist_changed = True
 
-        # RESET STATE ONLY WHEN PRICE GOES ABOVE SUPERTREND
         if close_price > st_line:
             WATCHLIST[symbol]['last_state'] = 'reset'
             watchlist_changed = True
@@ -686,10 +710,8 @@ async def bot2_scan(client: httpx.AsyncClient):
     print("Bot2: Started", flush=True)
     while True:
         try:
-            # 1. Update Triple Shield Market Health Status
             await update_market_health(client)
 
-            # 2. Process Watchlist Coins
             async with _lock: symbols_to_scan = list(WATCHLIST.keys())
             if not symbols_to_scan:
                 await asyncio.sleep(20)
@@ -707,7 +729,7 @@ async def bot2_scan(client: httpx.AsyncClient):
 @app.route('/')
 def home(): 
     return jsonify({
-        "status": "Bot Running", 
+        "status": "Bot Running v5.4", 
         "watchlist_count": len(WATCHLIST),
         "market_health": MARKET_HEALTH
     })
