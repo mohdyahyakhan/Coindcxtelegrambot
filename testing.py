@@ -86,7 +86,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v5.9.4 FINAL - 3 Level Breakdown")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v5.9.5 FINAL - Correct Low Fix")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -108,7 +108,7 @@ async def open_command(u,c):
     o={k:v for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'}
     if not o: return await u.message.reply_text("No Open Trades", parse_mode="HTML")
     msg=f"📊 OPEN ({len(o)}/{MAX_OPEN_TRADES})\n\n"
-    for s,t in o.items(): msg+=f"{s} #{t.get('attempt',1)}/3 Entry ${t['entry']:.6f} TP ${t['tp']:.6f} SL ${t['sl']:.6f} {'🎯50% Booked' if t.get('tp1_hit') else ''}\n\n"
+    for s,t in o.items(): msg+=f"{s} #{t.get('attempt',1)}/3 Entry ${t['entry']:.8f} TP ${t['tp']:.8f} SL ${t['sl']:.8f} {'🎯50% Booked' if t.get('tp1_hit') else ''}\n\n"
     await u.message.reply_text(msg, parse_mode="HTML")
 async def pnl_command(u,c):
     b=BALANCE_DATA
@@ -279,12 +279,10 @@ async def check_paper_trades(client, df_live, symbol):
         else:
             eprice=cclose; scode='CLOSED_ST_EXIT'; emoji='🚀'
             rtxt="ST Reversal - Runner Closed"
-
         if attempt == 1:
             if tp1_done: remove_from_watchlist = True
             else: remove_from_watchlist = False
         else: remove_from_watchlist = True
-
         async with _lock:
             if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!='OPEN': return
             tamt=trade.get('trade_amount_usdt', trade['balance_at_entry']*RISK_PER_TRADE)*ratio
@@ -307,7 +305,7 @@ async def check_paper_trades(client, df_live, symbol):
         await save_balance_data(client); await save_paper_trades(client); await save_watchlist(client)
         msg=f"{emoji} <b>TRADE CLOSED</b>\n<b>{symbol}</b> #{attempt}/3\n{rtxt}\nExit ${eprice:.6f}\nPnL {npct:.2f}% / ${nusdt:.2f}"
         if remove_from_watchlist: msg+="\n🗑️ Removed"
-        else: msg+="\n⏳ Waiting for 2nd Entry (ST < EMA Breakdown)"
+        else: msg+="\n⏳ Waiting for 2nd Entry"
         asyncio.create_task(send_telegram(client, msg))
 
 async def bot1_scan(client):
@@ -353,7 +351,7 @@ async def process_symbol(client, symbol):
     prev_ema_live=df_live['ema_val'].iloc[-2]
     st_live=df_live['st_line'].iloc[-1]
     prev_st_live=df_live['st_line'].iloc[-2]
-    low_live_crossover=df_live['low'].iloc[-2]
+    low_current=df_live['low'].iloc[-1]
 
     changed=False; msg=None; new=False
     async with _lock:
@@ -368,46 +366,60 @@ async def process_symbol(client, symbol):
         if att==0:
             is_price_ema_cross = close_live < ema_live and prev_close_live >= prev_ema_live
             if trig is None and is_price_ema_cross:
-                WATCHLIST[symbol]['trigger_low']=float(low_live_crossover)
+                WATCHLIST[symbol]['trigger_low']=float(low_current)
                 print(f"{symbol}: #1 EMA Cross Below - Low {WATCHLIST[symbol]['trigger_low']}", flush=True)
                 changed=True
-            elif trig is not None and clow_live < trig:
-                should=True
-                pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
-                exec_price=round(trig-pip,8)
-
-        # ===== #2 ENTRY: ST < EMA CROSS - TERA NAYA RULE =====
-        elif att==1:
-            is_st_ema_cross = st_live < ema_live and prev_st_live >= prev_ema_live
-            if trig is None and is_st_ema_cross:
-                WATCHLIST[symbol]['trigger_low']=float(low_live_crossover)
-                print(f"{symbol}: #2 ST Below EMA Cross - Low {WATCHLIST[symbol]['trigger_low']}", flush=True)
-                changed=True
-            elif trig is not None and clow_live < trig:
-                should=True
-                pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
-                exec_price=round(trig-pip,8)
-
-        # ===== #3 ENTRY: PRICE < ST CROSS WITH RESET - TERA NAYA RULE =====
-        elif att==2:
-            # Step 1: Check price already below ST? If yes, wait for price to go above ST first
-            if close_live > st_live:
-                if WATCHLIST[symbol].get('last_state')!= 'reset' or trig is not None:
-                    WATCHLIST[symbol]['last_state']='reset'
-                    WATCHLIST[symbol]['trigger_low']=None
-                    print(f"{symbol}: #3 Reset - Price went above ST, waiting for breakdown", flush=True)
+            elif trig is not None:
+                # Agar same candle ka wick aur neeche gaya to trigger ko update karo, entry mat lo
+                if low_current < trig and close_live < ema_live:
+                    WATCHLIST[symbol]['trigger_low']=float(low_current)
+                    print(f"{symbol}: #1 Low Updated to {low_current}", flush=True)
                     changed=True
-            # Step 2: Only after reset, mark low of Price < ST candle
-            if WATCHLIST[symbol].get('last_state')=='reset':
-                is_price_st_cross = close_live < st_live and prev_close_live >= prev_st_live
-                if trig is None and is_price_st_cross:
-                    WATCHLIST[symbol]['trigger_low']=float(low_live_crossover)
-                    print(f"{symbol}: #3 Price Below ST Cross - Low {WATCHLIST[symbol]['trigger_low']}", flush=True)
-                    changed=True
-                elif trig is not None and clow_live < trig:
+                elif clow_live < trig:
                     should=True
                     pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
                     exec_price=round(trig-pip,8)
+
+        # ===== #2 ENTRY: ST < EMA CROSS =====
+        elif att==1:
+            is_st_ema_cross = st_live < ema_live and prev_st_live >= prev_ema_live
+            if trig is None and is_st_ema_cross:
+                WATCHLIST[symbol]['trigger_low']=float(low_current)
+                print(f"{symbol}: #2 ST Below EMA Cross - Low {WATCHLIST[symbol]['trigger_low']}", flush=True)
+                changed=True
+            elif trig is not None:
+                if low_current < trig and st_live < ema_live:
+                    WATCHLIST[symbol]['trigger_low']=float(low_current)
+                    print(f"{symbol}: #2 Low Updated to {low_current}", flush=True)
+                    changed=True
+                elif clow_live < trig:
+                    should=True
+                    pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
+                    exec_price=round(trig-pip,8)
+
+        # ===== #3 ENTRY: PRICE < ST CROSS WITH RESET =====
+        elif att==2:
+            if close_live > st_live:
+                if WATCHLIST[symbol].get('last_state')!='reset' or trig is not None:
+                    WATCHLIST[symbol]['last_state']='reset'
+                    WATCHLIST[symbol]['trigger_low']=None
+                    print(f"{symbol}: #3 Reset - Price above ST", flush=True)
+                    changed=True
+            if WATCHLIST[symbol].get('last_state')=='reset':
+                is_price_st_cross = close_live < st_live and prev_close_live >= prev_st_live
+                if trig is None and is_price_st_cross:
+                    WATCHLIST[symbol]['trigger_low']=float(low_current)
+                    print(f"{symbol}: #3 Price Below ST Cross - Low {WATCHLIST[symbol]['trigger_low']}", flush=True)
+                    changed=True
+                elif trig is not None:
+                    if low_current < trig and close_live < st_live:
+                        WATCHLIST[symbol]['trigger_low']=float(low_current)
+                        print(f"{symbol}: #3 Low Updated to {low_current}", flush=True)
+                        changed=True
+                    elif clow_live < trig:
+                        should=True
+                        pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
+                        exec_price=round(trig-pip,8)
 
         if should and att<3 and not open_exists and active<MAX_OPEN_TRADES:
             ep=round(exec_price,8) if exec_price<1 else round(exec_price,6)
@@ -428,7 +440,7 @@ async def process_symbol(client, symbol):
     return changed
 
 async def bot2_scan(client):
-    print("Bot2: Started - v5.9.4 Triple Low Breakdown", flush=True)
+    print("Bot2: Started - v5.9.5 Correct Low", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -440,7 +452,7 @@ async def bot2_scan(client):
         await asyncio.sleep(10)
 
 @app.route('/')
-def home(): return jsonify({"status":"v5.9.4 Triple Low Breakdown","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v5.9.5 Correct Low Fix","watchlist":len(WATCHLIST)})
 
 async def main_async():
     limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
@@ -457,7 +469,7 @@ async def main_async():
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
         await app_t.initialize(); await app_t.start(); await app_t.updater.start_polling(drop_pending_updates=True)
-        print("v5.9.4 Operational - Triple Low Breakdown", flush=True)
+        print("v5.9.5 Operational - Correct Low", flush=True)
         while True: await asyncio.sleep(3600)
 
 def main():
