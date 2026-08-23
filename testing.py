@@ -86,7 +86,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v5.9.5 FINAL - Correct Low Fix")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v5.9.6 - 3 Attempt Fixed")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -233,6 +233,7 @@ async def check_paper_trades(client, df_live, symbol):
             await save_balance_data(client); await save_paper_trades(client)
             asyncio.create_task(send_telegram(client, f"🎯 <b>50% TP1 BOOKED (-5%) - FIRST ENTRY</b>\n<b>{symbol}</b> #{attempt}/3\nNet: ${net_usdt:.2f}\nSL -> BE ${entry:.6f}"))
         else:
+            # #2 aur #3 me 100% TP = direct remove
             gross_pct=((entry-trade['tp'])/entry)*100
             gross_usdt=trade_amount*gross_pct/100
             fee=trade_amount*EFFECTIVE_FEE_RATE + (trade_amount+gross_usdt)*EFFECTIVE_FEE_RATE
@@ -279,10 +280,20 @@ async def check_paper_trades(client, df_live, symbol):
         else:
             eprice=cclose; scode='CLOSED_ST_EXIT'; emoji='🚀'
             rtxt="ST Reversal - Runner Closed"
+
+        # ===== YAHI MAIN FIX HAI - TERI CONDITION =====
         if attempt == 1:
-            if tp1_done: remove_from_watchlist = True
-            else: remove_from_watchlist = False
-        else: remove_from_watchlist = True
+            if tp1_done:
+                remove_from_watchlist = True # #1 me 50% ke baad exit = remove
+            else:
+                remove_from_watchlist = False # #1 SL before TP = wait for #2
+        elif attempt == 2:
+            # #2 SL ho ya TP1? #2 me TP to upar hi handle ho gaya, yaha sirf SL case aayega
+            # Tu bola: #2 SL pe bhi remove nahi, #3 ka wait
+            remove_from_watchlist = False # #2 SL = wait for #3
+        else: # attempt 3
+            remove_from_watchlist = True # #3 any exit = remove
+
         async with _lock:
             if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!='OPEN': return
             tamt=trade.get('trade_amount_usdt', trade['balance_at_entry']*RISK_PER_TRADE)*ratio
@@ -305,7 +316,9 @@ async def check_paper_trades(client, df_live, symbol):
         await save_balance_data(client); await save_paper_trades(client); await save_watchlist(client)
         msg=f"{emoji} <b>TRADE CLOSED</b>\n<b>{symbol}</b> #{attempt}/3\n{rtxt}\nExit ${eprice:.6f}\nPnL {npct:.2f}% / ${nusdt:.2f}"
         if remove_from_watchlist: msg+="\n🗑️ Removed"
-        else: msg+="\n⏳ Waiting for 2nd Entry"
+        else:
+            nxt = "#2" if attempt==1 else "#3"
+            msg+=f"\n⏳ Waiting for {nxt} Entry"
         asyncio.create_task(send_telegram(client, msg))
 
 async def bot1_scan(client):
@@ -362,7 +375,6 @@ async def process_symbol(client, symbol):
         active=sum(1 for t in PAPER_TRADES.values() if t.get('status')=='OPEN')
         should=False; exec_price=None
 
-        # ===== #1 ENTRY: PRICE < EMA CROSS =====
         if att==0:
             is_price_ema_cross = close_live < ema_live and prev_close_live >= prev_ema_live
             if trig is None and is_price_ema_cross:
@@ -370,7 +382,6 @@ async def process_symbol(client, symbol):
                 print(f"{symbol}: #1 EMA Cross Below - Low {WATCHLIST[symbol]['trigger_low']}", flush=True)
                 changed=True
             elif trig is not None:
-                # Agar same candle ka wick aur neeche gaya to trigger ko update karo, entry mat lo
                 if low_current < trig and close_live < ema_live:
                     WATCHLIST[symbol]['trigger_low']=float(low_current)
                     print(f"{symbol}: #1 Low Updated to {low_current}", flush=True)
@@ -380,7 +391,6 @@ async def process_symbol(client, symbol):
                     pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
                     exec_price=round(trig-pip,8)
 
-        # ===== #2 ENTRY: ST < EMA CROSS =====
         elif att==1:
             is_st_ema_cross = st_live < ema_live and prev_st_live >= prev_ema_live
             if trig is None and is_st_ema_cross:
@@ -397,7 +407,6 @@ async def process_symbol(client, symbol):
                     pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
                     exec_price=round(trig-pip,8)
 
-        # ===== #3 ENTRY: PRICE < ST CROSS WITH RESET =====
         elif att==2:
             if close_live > st_live:
                 if WATCHLIST[symbol].get('last_state')!='reset' or trig is not None:
@@ -440,7 +449,7 @@ async def process_symbol(client, symbol):
     return changed
 
 async def bot2_scan(client):
-    print("Bot2: Started - v5.9.5 Correct Low", flush=True)
+    print("Bot2: Started - v5.9.6", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -452,7 +461,7 @@ async def bot2_scan(client):
         await asyncio.sleep(10)
 
 @app.route('/')
-def home(): return jsonify({"status":"v5.9.5 Correct Low Fix","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v5.9.6 3 Attempt Fixed","watchlist":len(WATCHLIST)})
 
 async def main_async():
     limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
@@ -469,7 +478,7 @@ async def main_async():
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
         await app_t.initialize(); await app_t.start(); await app_t.updater.start_polling(drop_pending_updates=True)
-        print("v5.9.5 Operational - Correct Low", flush=True)
+        print("v5.9.6 Operational", flush=True)
         while True: await asyncio.sleep(3600)
 
 def main():
