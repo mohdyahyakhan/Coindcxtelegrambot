@@ -8,9 +8,9 @@ from telegram.request import HTTPXRequest
 app = Flask(__name__)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-# ===== CONFIG v6.5 FINAL =====
+# ===== CONFIG v6.9 FINAL FIXED =====
 PUMP_PERCENT_24H = 40
-PIP_SIZE = 2
+PIP_SIZE = 2 # 1 kar dega to entry bilkul low ke paas hogi - 0.05653 -> 0.056529
 TARGET_TP_PERCENT = 0.05
 EMERGENCY_SL_PERCENT = 0.02
 ATR_PERIOD = 10
@@ -29,7 +29,6 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
 GIST_HEADERS = {"Authorization": f"token {GITHUB_TOKEN}"} if GITHUB_TOKEN else {}
 GIST_URL = f"https://api.github.com/gists/{GIST_ID}" if GIST_ID else None
 
-# ===== FIX: TELEGRAM TOKEN DEFINED - Yehi missing tha =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.environ.get("CHAT_ID") or os.environ.get("TELEGRAM_CHAT_ID")
 TELEGRAM_BOT_TOKEN = BOT_TOKEN
@@ -107,7 +106,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v6.5 FINAL - All Fixed", parse_mode="HTML")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v6.9 FINAL FIXED - Entry Gap Fixed", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -379,18 +378,27 @@ async def process_symbol(client, symbol):
         open_exists=PAPER_TRADES.get(symbol) and PAPER_TRADES[symbol].get('status')=='OPEN'
         active=sum(1 for t in PAPER_TRADES.values() if t.get('status')=='OPEN')
         should=False; exec_price=None
+
+        # ===== ENTRY #1 - FIXED: Exact First EMA Breakdown Candle =====
         if att==0:
             is_cross = close_closed < ema_closed and prev_close_closed >= prev_ema_closed
             if trig is None and is_cross:
                 WATCHLIST[symbol]['trigger_low']=float(low_closed)
+                print(f"✅ {symbol} #1 TRIGGER MARKED | Close={close_closed:.8f} < EMA={ema_closed:.8f} | Low={low_closed:.8f} - Entry will be {low_closed - tick*PIP_SIZE:.8f}", flush=True)
                 changed=True
-            elif trig is not None and clow_live < trig:
-                should=True
-                exec_price=price_to_tick(trig - (tick * PIP_SIZE), tick)
+            elif trig is not None:
+                # Entry level = Trigger Low - 2 pip
+                entry_level = price_to_tick(trig - (tick * PIP_SIZE), tick)
+                # Jaise hi low, trigger low se neeche aaye (0.05653 -> 0.05652)
+                if clow_live < trig:
+                    should=True
+                    exec_price=entry_level
+
         elif att==1:
             is_cross = st_closed < ema_closed and prev_st_closed >= prev_ema_closed
             if trig is None and is_cross:
                 WATCHLIST[symbol]['trigger_low']=float(low_closed)
+                print(f"✅ {symbol} #2 TRIGGER MARKED | ST {st_closed:.8f} < EMA {ema_closed:.8f} | Low={low_closed:.8f}", flush=True)
                 changed=True
             elif trig is not None and clow_live < trig:
                 should=True
@@ -405,10 +413,12 @@ async def process_symbol(client, symbol):
                 is_cross = close_closed < st_closed and prev_close_closed >= prev_st_closed
                 if trig is None and is_cross:
                     WATCHLIST[symbol]['trigger_low']=float(low_closed)
+                    print(f"✅ {symbol} #3 TRIGGER MARKED | Close {close_closed:.8f} < ST {st_closed:.8f} | Low={low_closed:.8f}", flush=True)
                     changed=True
                 elif trig is not None and clow_live < trig:
                     should=True
                     exec_price=price_to_tick(trig - (tick * PIP_SIZE), tick)
+
         if should and att<3 and not open_exists and active<MAX_OPEN_TRADES:
             ep=price_to_tick(exec_price, tick)
             tp=price_to_tick(ep*(1-TARGET_TP_PERCENT), tick)
@@ -417,7 +427,7 @@ async def process_symbol(client, symbol):
             cur=att+1
             WATCHLIST[symbol]['attempts']=cur; WATCHLIST[symbol]['last_state']='short'; WATCHLIST[symbol]['trigger_low']=None
             PAPER_TRADES[symbol]={'entry':ep,'tp':tp,'sl':sl,'status':'OPEN','time':time.time(),'balance_at_entry':BALANCE_DATA['total_balance'],'trade_amount_usdt':tamt,'attempt':cur,'max_favorable_pnl_pct':0.0,'tp1_hit':False}
-            msg=f"📝 <b>SHORT ENTRY</b> {symbol} #{cur}/3\nEntry ${ep:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)\nTick {tick} x{PIP_SIZE}"
+            msg=f"📝 <b>SHORT ENTRY</b> {symbol} #{cur}/3\nEntry ${ep:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)\nTrigger Low ${trig:.8f} Tick {tick} x{PIP_SIZE}"
             new=True; changed=True
         has_open=PAPER_TRADES.get(symbol,{}).get('status')=='OPEN'
         if time.time()-WATCHLIST[symbol]['time'] > WATCHLIST_DAYS*86400 and not has_open:
@@ -428,7 +438,7 @@ async def process_symbol(client, symbol):
     return changed
 
 async def bot2_scan(client):
-    print("Bot2: Started v6.5", flush=True)
+    print("Bot2: Started v6.9 GAP FIXED", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -439,7 +449,7 @@ async def bot2_scan(client):
         await asyncio.sleep(10)
 
 @app.route('/')
-def home(): return jsonify({"status":"v6.5 FINAL All Fixed","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v6.9 GAP FIXED - Exact Low Entry","watchlist":len(WATCHLIST)})
 
 async def main_async():
     limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
@@ -458,7 +468,7 @@ async def main_async():
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
         await app_t.initialize(); await app_t.start(); await app_t.updater.start_polling(drop_pending_updates=True)
-        print("v6.5 Operational FINAL", flush=True)
+        print("v6.9 Operational GAP FIXED", flush=True)
         while True: await asyncio.sleep(3600)
 
 def main():
