@@ -1,4 +1,5 @@
 import threading, asyncio, httpx, time, os, json, pandas as pd, math, logging, traceback
+from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
@@ -7,17 +8,18 @@ from telegram.request import HTTPXRequest
 app = Flask(__name__)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-# ===== CONFIG =====
+# ===== CONFIG v6.5 FINAL =====
 PUMP_PERCENT_24H = 40
-WATCHLIST_DAYS = 2
+PIP_SIZE = 2
+TARGET_TP_PERCENT = 0.05
+EMERGENCY_SL_PERCENT = 0.02
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
-RISK_PER_TRADE = 0.20
+POSITION_SIZE_PERCENT = 0.20
+WATCHLIST_DAYS = 2
 MAX_OPEN_TRADES = 4
-MIN_VOLUME_24H = 2000000
-EMERGENCY_SL_PERCENT = 0.020
-TARGET_TP_PERCENT = 0.050
+MIN_TURNOVER_24H = 2000000
 TAKER_FEE = 0.0005
 GST_RATE = 0.18
 EFFECTIVE_FEE_RATE = TAKER_FEE * (1 + GST_RATE)
@@ -29,12 +31,18 @@ GIST_URL = f"https://api.github.com/gists/{GIST_ID}" if GIST_ID else None
 
 WATCHLIST = {}
 PAPER_TRADES = {}
-TELEGRAM_BOT_TOKEN = os.environ.get("BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("CHAT_ID")
+TICK_CACHE = {}
 _lock = asyncio.Lock()
+_gist_lock = asyncio.Lock()
 BALANCE_DATA = {"total_balance": 10000.0, "starting_balance": 10000.0, "lifetime_pnl_usdt": 0.0, "lifetime_pnl_percent": 0.0}
 
-def get_coindcx_pair(s): return f"F-{s.replace('USDT','').replace('.P','')}_USDT"
+def price_to_tick(price, tick):
+    try:
+        d_price = Decimal(str(price))
+        d_tick = Decimal(str(tick))
+        quantized = (d_price / d_tick).to_integral_value(rounding=ROUND_DOWN) * d_tick
+        return float(quantized)
+    except: return round(price, 8)
 
 async def gist_get(client, filename):
     if not GIST_URL or not GITHUB_TOKEN: return {}
@@ -45,18 +53,26 @@ async def gist_get(client, filename):
         if filename in d.get('files',{}):
             c=d['files'][filename]['content']
             return json.loads(c) if c else {}
-    except: pass
+    except Exception as e:
+        print(f"Gist Get Error: {e}", flush=True)
+        return {}
     return {}
-async def gist_set(client, filename, content):
+
+async def gist_set_locked(client, filename, content):
     if not GIST_URL or not GITHUB_TOKEN: return False
-    payload={"files":{filename:{"content": json.dumps(content, indent=2)}}}
-    for _ in range(3):
-        try:
-            r=await client.patch(GIST_URL, headers=GIST_HEADERS, json=payload, timeout=15.0)
-            if r.status_code==200: return True
-        except: await asyncio.sleep(2)
+    async with _gist_lock:
+        payload={"files":{filename:{"content": json.dumps(content, indent=2)}}}
+        for _ in range(3):
+            try:
+                r=await client.patch(GIST_URL, headers=GIST_HEADERS, json=payload, timeout=15.0)
+                if r.status_code==200: return True
+            except: await asyncio.sleep(2)
     return False
-async def save_watchlist(c): await gist_set(c, 'watchlist.json', {'coins': WATCHLIST})
+
+async def save_watchlist(c): await gist_set_locked(c, 'watchlist.json', {'coins': WATCHLIST})
+async def save_paper_trades(c): await gist_set_locked(c, 'paper_trades.json', PAPER_TRADES)
+async def save_balance_data(c): await gist_set_locked(c, 'total_pnl.json', BALANCE_DATA)
+
 async def load_watchlist(c):
     global WATCHLIST
     data=await gist_get(c, 'watchlist.json')
@@ -66,14 +82,13 @@ async def load_watchlist(c):
             if isinstance(d, dict):
                 cs=s.replace('.P','')
                 WATCHLIST[cs]=d
-                WATCHLIST[cs].setdefault('last_state','reset')
+                WATCHLIST[cs].setdefault('last_state','wait_above_st' if d.get('attempts',0)==2 else 'reset')
                 WATCHLIST[cs].setdefault('attempts',0)
                 WATCHLIST[cs].setdefault('trigger_low',None)
-async def save_paper_trades(c): await gist_set(c, 'paper_trades.json', PAPER_TRADES)
+
 async def load_paper_trades(c):
     global PAPER_TRADES
     PAPER_TRADES=await gist_get(c, 'paper_trades.json') or {}
-async def save_balance_data(c): await gist_set(c, 'total_pnl.json', BALANCE_DATA)
 async def load_balance_data(c):
     global BALANCE_DATA
     d=await gist_get(c, 'total_pnl.json')
@@ -86,7 +101,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v5.9.6 - 3 Attempt Fixed")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v6.5 FINAL - All Fixed", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -125,16 +140,19 @@ async def close_command(u,c):
     ep=df['close'].iloc[-1]
     async with _lock:
         ratio=0.5 if tr.get('tp1_hit') else 1.0
-        amt=tr.get('trade_amount_usdt', tr['balance_at_entry']*RISK_PER_TRADE)*ratio
+        amt=tr.get('trade_amount_usdt', tr['balance_at_entry']*POSITION_SIZE_PERCENT)*ratio
         gpct=((tr['entry']-ep)/tr['entry'])*100
         gusdt=amt*gpct/100
         fee=amt*EFFECTIVE_FEE_RATE + max(0,amt+gusdt)*EFFECTIVE_FEE_RATE
         nusdt=gusdt-fee
         BALANCE_DATA['total_balance']+=nusdt
+        BALANCE_DATA['lifetime_pnl_usdt']=BALANCE_DATA['total_balance']-BALANCE_DATA['starting_balance']
+        BALANCE_DATA['lifetime_pnl_percent']=(BALANCE_DATA['lifetime_pnl_usdt']/BALANCE_DATA['starting_balance'])*100
         PAPER_TRADES[s]['status']='CLOSED_MANUAL'
+        PAPER_TRADES[s]['pnl_percent']=round((nusdt/amt)*100,2) if amt>0 else 0
+        PAPER_TRADES[s]['pnl_usdt']=round(nusdt,2)
         WATCHLIST.pop(s,None)
-        if cl:
-            await save_paper_trades(cl); await save_balance_data(cl); await save_watchlist(cl)
+    if cl: await save_paper_trades(cl); await save_balance_data(cl); await save_watchlist(cl)
     await u.message.reply_text(f"Closed {s} PnL ${nusdt:.2f}", parse_mode="HTML")
 
 async def get_klines_bybit_async(client, symbol, interval='5', limit=400, include_current=False):
@@ -150,31 +168,26 @@ async def get_klines_bybit_async(client, symbol, interval='5', limit=400, includ
             df=df.iloc[::-1].reset_index(drop=True)
             if not include_current: df=df.iloc[:-1].reset_index(drop=True)
             if len(df)>=50: return df
-    except: pass
+    except Exception as e: print(f"Kline Error {symbol}: {e}", flush=True)
     return None
 
-async def get_klines_coindcx_async(client, symbol, interval='5m', limit=400, include_current=False):
-    pair=get_coindcx_pair(symbol)
-    url="https://api.coindcx.com/exchange/v1/candles"
-    params={'pair':pair,'interval':interval,'limit':limit}
+async def get_tick_size(client, symbol):
+    if symbol in TICK_CACHE: return TICK_CACHE[symbol]
+    url="https://api.bybit.com/v5/market/instruments-info"
+    by=symbol if symbol.endswith('USDT') else f"{symbol}USDT"
+    params={'category':'linear','symbol':by}
     try:
         res=await client.get(url, params=params, timeout=10.0)
         data=res.json()
-        if not data or not isinstance(data, list): return None
-        df=pd.DataFrame(data).rename(columns={'time':'timestamp'})
-        df['timestamp']=df['timestamp'].astype('int64')
-        df[['open','high','low','close']]=df[['open','high','low','close']].astype(float)
-        df=df[['timestamp','open','high','low','close']].sort_values('timestamp').reset_index(drop=True)
-        if not include_current: df=df.iloc[:-1].reset_index(drop=True)
-        if len(df)>=50: return df
-    except: pass
+        if data.get('retCode')==0 and data['result']['list']:
+            tick=float(data['result']['list'][0]['priceFilter']['tickSize'])
+            TICK_CACHE[symbol]=tick
+            return tick
+    except Exception as e: print(f"Tick Error {symbol}: {e}", flush=True)
     return None
 
 async def get_klines(client, symbol, interval='5', limit=400, include_current=False):
-    c_interval='5m' if interval=='5' else interval
-    df=await get_klines_bybit_async(client, symbol, interval, limit, include_current)
-    if df is not None: return df
-    return await get_klines_coindcx_async(client, symbol, c_interval, limit, include_current)
+    return await get_klines_bybit_async(client, symbol, interval, limit, include_current)
 
 def calculate_supertrend(df, period=10, multiplier=3):
     df=df.copy()
@@ -204,19 +217,23 @@ def calculate_supertrend(df, period=10, multiplier=3):
         elif not prev_st and close_i > df['final_upperband'].iloc[i]: df.loc[df.index[i],'supertrend']=True
         else: df.loc[df.index[i],'supertrend']=prev_st
         df.loc[df.index[i],'st_line']=df['final_lowerband'].iloc[i] if df['supertrend'].iloc[i] else df['final_upperband'].iloc[i]
-    df['ema_val']=df['close'].ewm(span=EMA_PERIOD, adjust=False).mean().rolling(window=9, min_periods=1).mean()
+    df['ema_val']=df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     return df
 
-async def check_paper_trades(client, df_live, symbol):
+async def check_paper_trades(client, df_live, df_closed, symbol):
     global BALANCE_DATA
     async with _lock:
         if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!='OPEN': return
         trade = PAPER_TRADES[symbol].copy()
-    clow=df_live['low'].iloc[-1]; chigh=df_live['high'].iloc[-1]; cclose=df_live['close'].iloc[-1]; st=df_live['st_line'].iloc[-1]
+    clow_live=df_live['low'].iloc[-1]
+    chigh_live=df_live['high'].iloc[-1]
+    cclose_closed=df_closed['close'].iloc[-1]
+    is_bullish = df_closed['supertrend'].iloc[-1] == True
+    prev_is_bullish = df_closed['supertrend'].iloc[-2] == True
     entry=trade['entry']; attempt=trade.get('attempt',1)
 
-    if clow <= trade['tp'] and not trade.get('tp1_hit'):
-        trade_amount = trade.get('trade_amount_usdt', trade['balance_at_entry']*RISK_PER_TRADE)
+    if clow_live <= trade['tp'] and not trade.get('tp1_hit'):
+        trade_amount = trade.get('trade_amount_usdt', trade['balance_at_entry']*POSITION_SIZE_PERCENT)
         if attempt == 1:
             partial=trade_amount*0.5
             gross_pct=((entry-trade['tp'])/entry)*100
@@ -226,14 +243,17 @@ async def check_paper_trades(client, df_live, symbol):
             async with _lock:
                 if symbol in PAPER_TRADES and PAPER_TRADES[symbol]['status']=='OPEN':
                     BALANCE_DATA['total_balance']+=net_usdt
+                    BALANCE_DATA['lifetime_pnl_usdt']=BALANCE_DATA['total_balance']-BALANCE_DATA['starting_balance']
+                    BALANCE_DATA['lifetime_pnl_percent']=(BALANCE_DATA['lifetime_pnl_usdt']/BALANCE_DATA['starting_balance'])*100
                     PAPER_TRADES[symbol]['tp1_hit']=True
                     PAPER_TRADES[symbol]['sl']=entry
                     PAPER_TRADES[symbol]['max_favorable_pnl_pct']=5.0
-                    trade['tp1_hit']=True; trade['sl']=entry; trade['max_favorable_pnl_pct']=5.0
+                    trade['tp1_hit']=True
+                    trade['sl']=entry
+                    trade['max_favorable_pnl_pct']=5.0
             await save_balance_data(client); await save_paper_trades(client)
-            asyncio.create_task(send_telegram(client, f"🎯 <b>50% TP1 BOOKED (-5%) - FIRST ENTRY</b>\n<b>{symbol}</b> #{attempt}/3\nNet: ${net_usdt:.2f}\nSL -> BE ${entry:.6f}"))
+            asyncio.create_task(send_telegram(client, f"🎯 <b>50% TP1 BOOKED (-5%)</b>\n<b>{symbol}</b> #{attempt}/3\nSL -> BE"))
         else:
-            # #2 aur #3 me 100% TP = direct remove
             gross_pct=((entry-trade['tp'])/entry)*100
             gross_usdt=trade_amount*gross_pct/100
             fee=trade_amount*EFFECTIVE_FEE_RATE + (trade_amount+gross_usdt)*EFFECTIVE_FEE_RATE
@@ -249,54 +269,39 @@ async def check_paper_trades(client, df_live, symbol):
                 PAPER_TRADES[symbol]['pnl_usdt']=round(net_usdt,2)
                 WATCHLIST.pop(symbol,None)
             await save_balance_data(client); await save_paper_trades(client); await save_watchlist(client)
-            asyncio.create_task(send_telegram(client, f"✅ <b>100% TP HIT - {attempt} ENTRY CLOSED</b>\n<b>{symbol}</b> #{attempt}/3\nNet: {net_pct:.2f}% / ${net_usdt:.2f}\n🗑️ Removed"))
+            asyncio.create_task(send_telegram(client, f"✅ <b>100% TP HIT #{attempt}</b> {symbol} 🗑️"))
             return
 
     if trade.get('tp1_hit') and attempt==1:
-        max_drop=((entry-clow)/entry)*100
+        max_drop=((entry-clow_live)/entry)*100
         prev_max=trade.get('max_favorable_pnl_pct',5.0)
         if max_drop>prev_max:
             steps=math.floor(max_drop-5.0)
             if steps>math.floor(prev_max-5.0):
                 locked=steps*1.0
-                new_sl=round(entry*(1-locked/100.0),6)
+                new_sl=entry*(1-locked/100.0)
+                new_sl=price_to_tick(new_sl, await get_tick_size(client, symbol) or 0.0001)
                 if new_sl<trade['sl']:
                     async with _lock:
                         if symbol in PAPER_TRADES and PAPER_TRADES[symbol]['status']=='OPEN':
                             PAPER_TRADES[symbol]['sl']=new_sl
                             PAPER_TRADES[symbol]['max_favorable_pnl_pct']=max_drop
-                            trade['sl']=new_sl
                     await save_paper_trades(client)
 
-    sl_hit=chigh >= trade['sl']
-    st_exit=trade.get('tp1_hit',False) and attempt==1 and (cclose > st)
+    sl_hit=chigh_live >= trade['sl']
+    st_exit=trade.get('tp1_hit',False) and attempt==1 and (is_bullish and not prev_is_bullish)
 
     if sl_hit or st_exit:
         tp1_done=trade.get('tp1_hit',False)
         ratio=0.5 if tp1_done else 1.0
-        if sl_hit:
-            eprice=trade['sl']; scode='CLOSED_SL'; emoji='❌' if not tp1_done else '🛡️'
-            rtxt="Hard SL 2%" if not tp1_done else "Trailing SL Hit"
-        else:
-            eprice=cclose; scode='CLOSED_ST_EXIT'; emoji='🚀'
-            rtxt="ST Reversal - Runner Closed"
-
-        # ===== YAHI MAIN FIX HAI - TERI CONDITION =====
-        if attempt == 1:
-            if tp1_done:
-                remove_from_watchlist = True # #1 me 50% ke baad exit = remove
-            else:
-                remove_from_watchlist = False # #1 SL before TP = wait for #2
-        elif attempt == 2:
-            # #2 SL ho ya TP1? #2 me TP to upar hi handle ho gaya, yaha sirf SL case aayega
-            # Tu bola: #2 SL pe bhi remove nahi, #3 ka wait
-            remove_from_watchlist = False # #2 SL = wait for #3
-        else: # attempt 3
-            remove_from_watchlist = True # #3 any exit = remove
-
+        eprice=trade['sl'] if sl_hit else cclose_closed
+        scode='CLOSED_SL' if sl_hit else 'CLOSED_ST_EXIT'
+        if attempt == 1: remove_from_watchlist = True if tp1_done else False
+        elif attempt == 2: remove_from_watchlist = False
+        else: remove_from_watchlist = True
         async with _lock:
             if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!='OPEN': return
-            tamt=trade.get('trade_amount_usdt', trade['balance_at_entry']*RISK_PER_TRADE)*ratio
+            tamt=trade.get('trade_amount_usdt', trade['balance_at_entry']*POSITION_SIZE_PERCENT)*ratio
             gpct=((entry-eprice)/entry)*100
             gusdt=tamt*gpct/100
             fee=tamt*EFFECTIVE_FEE_RATE + max(0,tamt+gusdt)*EFFECTIVE_FEE_RATE
@@ -311,18 +316,14 @@ async def check_paper_trades(client, df_live, symbol):
             if remove_from_watchlist: WATCHLIST.pop(symbol,None)
             else:
                 if symbol in WATCHLIST:
-                    WATCHLIST[symbol]['last_state']='reset'
+                    if attempt == 1: WATCHLIST[symbol]['last_state']='reset'
+                    elif attempt == 2: WATCHLIST[symbol]['last_state']='wait_above_st'
                     WATCHLIST[symbol]['trigger_low']=None
         await save_balance_data(client); await save_paper_trades(client); await save_watchlist(client)
-        msg=f"{emoji} <b>TRADE CLOSED</b>\n<b>{symbol}</b> #{attempt}/3\n{rtxt}\nExit ${eprice:.6f}\nPnL {npct:.2f}% / ${nusdt:.2f}"
-        if remove_from_watchlist: msg+="\n🗑️ Removed"
-        else:
-            nxt = "#2" if attempt==1 else "#3"
-            msg+=f"\n⏳ Waiting for {nxt} Entry"
-        asyncio.create_task(send_telegram(client, msg))
+        asyncio.create_task(send_telegram(client, f"{'❌ SL' if sl_hit else '🚀 ST Exit'} {symbol} #{attempt}/3 {'🗑️' if remove_from_watchlist else '⏳ Next'}"))
 
 async def bot1_scan(client):
-    print("Bot1: Started - 40% Pump Scanner", flush=True)
+    print("Bot1: Started", flush=True)
     while True:
         try:
             url="https://api.bybit.com/v5/market/tickers?category=linear"
@@ -332,41 +333,46 @@ async def bot1_scan(client):
             if data.get('retCode')==0 and data.get('result'):
                 for t in data['result']['list']:
                     m=t.get('symbol','')
-                    if not m.endswith('USDT') and not m.endswith('USDT.P'): continue
+                    if not m.endswith('USDT'): continue
                     s=m.replace('.P','')
                     try:
-                        ch=float(t.get('price24hPcnt',0))*100; vol=float(t.get('volume24h',0)); lp=float(t.get('lastPrice',0))
+                        ch=float(t.get('price24hPcnt',0))*100
+                        turnover=float(t.get('turnover24h',0))
                     except: continue
-                    if vol < MIN_VOLUME_24H or lp < 0.001: continue
+                    if turnover < MIN_TURNOVER_24H: continue
                     async with _lock:
-                        if ch >= PUMP_PERCENT_24H and s not in WATCHLIST:
+                        if ch > PUMP_PERCENT_24H and s not in WATCHLIST:
                             WATCHLIST[s]={'time':time.time(),'attempts':0,'last_state':'reset','trigger_low':None}
                             added+=1
-                            asyncio.create_task(send_telegram(client, f"🚨 <b>40% PUMP</b> {s} +{ch:.2f}%"))
+                            asyncio.create_task(send_telegram(client, f"🚨 <b>40%+ PUMP</b> {s} +{ch:.2f}% Turn ${turnover:,.0f}"))
             if added>0: await save_watchlist(client)
-        except Exception as e:
-            print(f"Bot1 Error: {e}", flush=True); traceback.print_exc()
+        except Exception as e: print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(60)
 
 async def process_symbol(client, symbol):
-    df_live=await get_klines(client, symbol, include_current=True)
-    if df_live is None or len(df_live) < EMA_PERIOD+2: return False
-    df_live=calculate_supertrend(df_live, ATR_PERIOD, ATR_MULTIPLIER)
-    df_closed=await get_klines(client, symbol, include_current=False)
-    if df_closed is None or len(df_closed) < EMA_PERIOD+2: return False
-    df_closed=calculate_supertrend(df_closed, ATR_PERIOD, ATR_MULTIPLIER)
-    await check_paper_trades(client, df_live, symbol)
+    df_raw=await get_klines(client, symbol, include_current=True, limit=402)
+    if df_raw is None or len(df_raw) < EMA_PERIOD+2: return False
+    df_live_raw=df_raw.copy()
+    df_closed_raw=df_raw.iloc[:-1].reset_index(drop=True)
+    df_live=await asyncio.to_thread(calculate_supertrend, df_live_raw, ATR_PERIOD, ATR_MULTIPLIER)
+    df_closed=await asyncio.to_thread(calculate_supertrend, df_closed_raw, ATR_PERIOD, ATR_MULTIPLIER)
+    await check_paper_trades(client, df_live, df_closed, symbol)
 
     clow_live=df_live['low'].iloc[-1]
-    close_live=df_live['close'].iloc[-1]
-    prev_close_live=df_live['close'].iloc[-2]
-    ema_live=df_live['ema_val'].iloc[-1]
-    prev_ema_live=df_live['ema_val'].iloc[-2]
-    st_live=df_live['st_line'].iloc[-1]
-    prev_st_live=df_live['st_line'].iloc[-2]
-    low_current=df_live['low'].iloc[-1]
+    low_closed=df_closed['low'].iloc[-1]
+    close_closed=df_closed['close'].iloc[-1]
+    prev_close_closed=df_closed['close'].iloc[-2]
+    ema_closed=df_closed['ema_val'].iloc[-1]
+    prev_ema_closed=df_closed['ema_val'].iloc[-2]
+    st_closed=df_closed['st_line'].iloc[-1]
+    prev_st_closed=df_closed['st_line'].iloc[-2]
 
-    changed=False; msg=None; new=False
+    changed=False; new=False; msg=None
+    tick=await get_tick_size(client, symbol)
+    if tick is None:
+        print(f"{symbol}: Tick fetch failed, skip", flush=True)
+        return False
+
     async with _lock:
         if symbol not in WATCHLIST: return False
         att=WATCHLIST[symbol].get('attempts',0)
@@ -376,98 +382,76 @@ async def process_symbol(client, symbol):
         should=False; exec_price=None
 
         if att==0:
-            is_price_ema_cross = close_live < ema_live and prev_close_live >= prev_ema_live
-            if trig is None and is_price_ema_cross:
-                WATCHLIST[symbol]['trigger_low']=float(low_current)
-                print(f"{symbol}: #1 EMA Cross Below - Low {WATCHLIST[symbol]['trigger_low']}", flush=True)
+            is_cross = close_closed < ema_closed and prev_close_closed >= prev_ema_closed
+            if trig is None and is_cross:
+                WATCHLIST[symbol]['trigger_low']=float(low_closed)
                 changed=True
-            elif trig is not None:
-                if low_current < trig and close_live < ema_live:
-                    WATCHLIST[symbol]['trigger_low']=float(low_current)
-                    print(f"{symbol}: #1 Low Updated to {low_current}", flush=True)
-                    changed=True
-                elif clow_live < trig:
-                    should=True
-                    pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
-                    exec_price=round(trig-pip,8)
+            elif trig is not None and clow_live < trig:
+                should=True
+                exec_price=price_to_tick(trig - (tick * PIP_SIZE), tick)
 
         elif att==1:
-            is_st_ema_cross = st_live < ema_live and prev_st_live >= prev_ema_live
-            if trig is None and is_st_ema_cross:
-                WATCHLIST[symbol]['trigger_low']=float(low_current)
-                print(f"{symbol}: #2 ST Below EMA Cross - Low {WATCHLIST[symbol]['trigger_low']}", flush=True)
+            is_cross = st_closed < ema_closed and prev_st_closed >= prev_ema_closed
+            if trig is None and is_cross:
+                WATCHLIST[symbol]['trigger_low']=float(low_closed)
                 changed=True
-            elif trig is not None:
-                if low_current < trig and st_live < ema_live:
-                    WATCHLIST[symbol]['trigger_low']=float(low_current)
-                    print(f"{symbol}: #2 Low Updated to {low_current}", flush=True)
-                    changed=True
-                elif clow_live < trig:
-                    should=True
-                    pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
-                    exec_price=round(trig-pip,8)
+            elif trig is not None and clow_live < trig:
+                should=True
+                exec_price=price_to_tick(trig - (tick * PIP_SIZE), tick)
 
         elif att==2:
-            if close_live > st_live:
-                if WATCHLIST[symbol].get('last_state')!='reset' or trig is not None:
-                    WATCHLIST[symbol]['last_state']='reset'
-                    WATCHLIST[symbol]['trigger_low']=None
-                    print(f"{symbol}: #3 Reset - Price above ST", flush=True)
+            state = WATCHLIST[symbol].get('last_state','wait_above_st')
+            if state == 'wait_above_st':
+                if close_closed > st_closed:
+                    WATCHLIST[symbol]['last_state']='ready_for_st_cross'
                     changed=True
-            if WATCHLIST[symbol].get('last_state')=='reset':
-                is_price_st_cross = close_live < st_live and prev_close_live >= prev_st_live
-                if trig is None and is_price_st_cross:
-                    WATCHLIST[symbol]['trigger_low']=float(low_current)
-                    print(f"{symbol}: #3 Price Below ST Cross - Low {WATCHLIST[symbol]['trigger_low']}", flush=True)
+            if WATCHLIST[symbol].get('last_state') == 'ready_for_st_cross':
+                is_cross = close_closed < st_closed and prev_close_closed >= prev_st_closed
+                if trig is None and is_cross:
+                    WATCHLIST[symbol]['trigger_low']=float(low_closed)
                     changed=True
-                elif trig is not None:
-                    if low_current < trig and close_live < st_live:
-                        WATCHLIST[symbol]['trigger_low']=float(low_current)
-                        print(f"{symbol}: #3 Low Updated to {low_current}", flush=True)
-                        changed=True
-                    elif clow_live < trig:
-                        should=True
-                        pip = 0.01 if trig>=100 else (0.0001 if trig>=1 else 0.000001 if trig>=0.01 else 0.0000001)
-                        exec_price=round(trig-pip,8)
+                elif trig is not None and clow_live < trig:
+                    should=True
+                    exec_price=price_to_tick(trig - (tick * PIP_SIZE), tick)
 
         if should and att<3 and not open_exists and active<MAX_OPEN_TRADES:
-            ep=round(exec_price,8) if exec_price<1 else round(exec_price,6)
-            tp=round(ep*(1-TARGET_TP_PERCENT),8) if ep<1 else round(ep*(1-TARGET_TP_PERCENT),6)
-            sl=round(ep*(1+EMERGENCY_SL_PERCENT),8) if ep<1 else round(ep*(1+EMERGENCY_SL_PERCENT),6)
-            tamt=BALANCE_DATA['total_balance']*RISK_PER_TRADE
+            ep=price_to_tick(exec_price, tick)
+            tp=price_to_tick(ep*(1-TARGET_TP_PERCENT), tick)
+            sl=price_to_tick(ep*(1+EMERGENCY_SL_PERCENT), tick)
+            tamt=BALANCE_DATA['total_balance']*POSITION_SIZE_PERCENT
             cur=att+1
             WATCHLIST[symbol]['attempts']=cur; WATCHLIST[symbol]['last_state']='short'; WATCHLIST[symbol]['trigger_low']=None
             PAPER_TRADES[symbol]={'entry':ep,'tp':tp,'sl':sl,'status':'OPEN','time':time.time(),'balance_at_entry':BALANCE_DATA['total_balance'],'trade_amount_usdt':tamt,'attempt':cur,'max_favorable_pnl_pct':0.0,'tp1_hit':False}
-            msg=f"📝 <b>SHORT ENTRY</b> {symbol} #{cur}/3\nEntry ${ep:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)\nLogic: #{cur} Low Breakdown ${trig:.8f}"
+            msg=f"📝 <b>SHORT ENTRY</b> {symbol} #{cur}/3\nEntry ${ep:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)\nTick {tick} x{PIP_SIZE}"
             new=True; changed=True
         has_open=PAPER_TRADES.get(symbol,{}).get('status')=='OPEN'
         if time.time()-WATCHLIST[symbol]['time'] > WATCHLIST_DAYS*86400 and not has_open:
             WATCHLIST.pop(symbol,None); changed=True
+
     if new:
         await save_paper_trades(client)
         asyncio.create_task(send_telegram(client, msg))
     return changed
 
 async def bot2_scan(client):
-    print("Bot2: Started - v5.9.6", flush=True)
+    print("Bot2: Started v6.5", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
             if not syms: await asyncio.sleep(20); continue
             results=await asyncio.gather(*[process_symbol(client, s) for s in syms])
             if any(results): await save_watchlist(client)
-        except Exception as e:
-            print(f"Bot2 Error: {e}", flush=True); traceback.print_exc()
+        except Exception as e: print(f"Bot2 Error: {e}", flush=True); traceback.print_exc()
         await asyncio.sleep(10)
 
 @app.route('/')
-def home(): return jsonify({"status":"v5.9.6 3 Attempt Fixed","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v6.5 FINAL All Fixed","watchlist":len(WATCHLIST)})
 
 async def main_async():
     limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
         await load_watchlist(client); await load_paper_trades(client); await load_balance_data(client)
-        print(f"Gist Loaded: {len(WATCHLIST)} coins | Balance: ${BALANCE_DATA['total_balance']:.2f}", flush=True)
+        print(f"Gist Loaded: {len(WATCHLIST)} | Balance: ${BALANCE_DATA['total_balance']:.2f}", flush=True)
         t_req=HTTPXRequest(connection_pool_size=20, connect_timeout=30.0, read_timeout=30.0, write_timeout=30.0)
         app_t=ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"]=client
@@ -478,7 +462,7 @@ async def main_async():
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
         await app_t.initialize(); await app_t.start(); await app_t.updater.start_polling(drop_pending_updates=True)
-        print("v5.9.6 Operational", flush=True)
+        print("v6.5 Operational FINAL", flush=True)
         while True: await asyncio.sleep(3600)
 
 def main():
