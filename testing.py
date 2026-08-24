@@ -37,6 +37,7 @@ WATCHLIST = {}; PAPER_TRADES = {}; TICK_CACHE = {}
 _lock = asyncio.Lock(); _gist_lock = asyncio.Lock()
 BALANCE_DATA = {"total_balance": 10000.0, "starting_balance": 10000.0, "lifetime_pnl_usdt": 0.0, "lifetime_pnl_percent": 0.0}
 application = None
+main_event_loop = None
 
 def price_to_tick(price, tick):
     try:
@@ -100,7 +101,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v8.1 WEBHOOK - No Conflict", parse_mode="HTML")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v8.2 WEBHOOK FIXED - No Conflict", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -340,7 +341,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"process_symbol error {symbol}: {e}", flush=True); traceback.print_exc(); return False
 
 async def bot2_scan(client):
-    print("Bot2: Started v8.1 WEBHOOK", flush=True)
+    print("Bot2: Started v8.2 WEBHOOK", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -351,22 +352,33 @@ async def bot2_scan(client):
         await asyncio.sleep(10)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.1 WEBHOOK - No Polling Conflict","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v8.2 WEBHOOK FIXED","watchlist":len(WATCHLIST)})
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    global application
-    if application is None: return jsonify({"ok": False}), 200
+    global application, main_event_loop
     try:
-        data = request.get_json(force=True)
+        if application is None or main_event_loop is None:
+            print("Webhook: app or loop not ready", flush=True)
+            return jsonify({"ok": True}), 200
+        data = request.get_json(force=True, silent=True)
+        if not data:
+            return jsonify({"ok": True}), 200
+        # Debug log
+        txt = ""
+        try: txt = data.get('message',{}).get('text','')
+        except: pass
+        print(f"📩 Webhook hit: {txt}", flush=True)
         update = Update.de_json(data, application.bot)
-        asyncio.run_coroutine_threadsafe(application.process_update(update), application._loop)
+        asyncio.run_coroutine_threadsafe(application.process_update(update), main_event_loop)
     except Exception as e:
         print(f"Webhook error: {e}", flush=True)
+        traceback.print_exc()
     return jsonify({"ok": True}), 200
 
 async def main_async():
-    global application
+    global application, main_event_loop
+    main_event_loop = asyncio.get_running_loop()
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
         await load_watchlist(client); await load_paper_trades(client); await load_balance_data(client)
@@ -375,7 +387,6 @@ async def main_async():
         t_req = HTTPXRequest(connection_pool_size=20, connect_timeout=30.0, read_timeout=30.0, write_timeout=30.0)
         app_t = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"] = client
-        app_t._loop = asyncio.get_event_loop()
         application = app_t
 
         for cmd, fn in [("start", start_command), ("add", add_command), ("remove", remove_command), ("watchlist", watchlist_command), ("open", open_command), ("close", close_command), ("pnl", pnl_command)]:
@@ -384,7 +395,6 @@ async def main_async():
         await app_t.initialize()
         await app_t.start()
 
-        # WEBHOOK SETUP - NO POLLING
         if WEBHOOK_URL:
             wh_url = f"{WEBHOOK_URL.rstrip('/')}/webhook"
             try:
@@ -395,24 +405,25 @@ async def main_async():
             except Exception as e:
                 print(f"Webhook set error: {e}", flush=True)
         else:
-            print("⚠️ WEBHOOK_URL not set - falling back to polling with 20s delay to avoid conflict", flush=True)
+            print("⚠️ WEBHOOK_URL not set - using polling", flush=True)
             try: await app_t.bot.delete_webhook(drop_pending_updates=True)
             except: pass
-            await asyncio.sleep(15)
-            await app_t.updater.start_polling(drop_pending_updates=True, poll_interval=3.0, bootstrap_retries=-1)
+            await asyncio.sleep(5)
+            await app_t.updater.start_polling(drop_pending_updates=True, poll_interval=2.0, bootstrap_retries=-1)
 
         port = int(os.environ.get("PORT", 10000))
-        # Flask ko main thread me run karenge webhook ke liye
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
 
         asyncio.create_task(bot1_scan(client))
         asyncio.create_task(bot2_scan(client))
 
-        print("v8.1 WEBHOOK Operational - Conflict Resolved Forever", flush=True)
+        print("v8.2 WEBHOOK FIXED Operational", flush=True)
         try:
             while True: await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
-            await app_t.updater.stop(); await app_t.stop(); await app_t.shutdown()
+            try: await app_t.updater.stop()
+            except: pass
+            await app_t.stop(); await app_t.shutdown()
 
 def main():
     loop=asyncio.get_event_loop()
