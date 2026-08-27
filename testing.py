@@ -1,4 +1,4 @@
-# COINDEX V8.5 - 2 STEP BREAK RULE FINAL
+# COINDEX V8.6 - 2 STEP BREAK + RED ST FILTER + 3HR COOLDOWN
 # Step1: Cross candle CLOSE par low mark, Step2: Break par entry
 
 import threading, asyncio, httpx, time, os, json, pandas as pd, math, logging, traceback
@@ -37,6 +37,7 @@ TELEGRAM_CHAT_ID = CHAT_ID
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL") or os.environ.get("RENDER_EXTERNAL_URL")
 
 WATCHLIST = {}; PAPER_TRADES = {}; TICK_CACHE = {}
+cooldown_coins = {} # symbol -> timestamp till ignore
 _lock = asyncio.Lock(); _gist_lock = asyncio.Lock()
 BALANCE_DATA = {"total_balance": 10000.0, "starting_balance": 10000.0, "lifetime_pnl_usdt": 0.0, "lifetime_pnl_percent": 0.0}
 application = None
@@ -104,7 +105,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v8.5 BREAK-WAIT - Mark on close, Entry on break", parse_mode="HTML")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v8.6 BREAK-WAIT + RED FILTER + 3HR COOLDOWN", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -115,16 +116,23 @@ async def add_command(u,c):
 async def remove_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
-        async with _lock: WATCHLIST.pop(s,None)
+        async with _lock:
+            WATCHLIST.pop(s,None)
+            cooldown_coins.pop(s,None)
         cl=c.bot_data.get("http_client")
         if cl: await save_watchlist(cl)
-        await u.message.reply_text(f"🗑️ {s} removed", parse_mode="HTML")
+        await u.message.reply_text(f"🗑️ {s} removed + cooldown cleared", parse_mode="HTML")
 async def watchlist_command(u,c):
     coins=", ".join(WATCHLIST.keys()) if WATCHLIST else "Empty"
     msg=""
     for s,d in WATCHLIST.items():
         trig=d.get('trigger_low')
         msg+=f"{s} #{d.get('attempts',0)+1} {d.get('last_state')} Trig:{trig}\n"
+    if cooldown_coins:
+        msg+="\n⏳ Cooldown:\n"
+        for s,ts in cooldown_coins.items():
+            rem=max(0,(ts-time.time())/3600)
+            msg+=f"{s} {rem:.1f}hr left\n"
     if not msg: msg="Empty"
     await u.message.reply_text(f"📋 Watchlist ({len(WATCHLIST)}):\n{msg}", parse_mode="HTML")
 async def open_command(u,c):
@@ -198,10 +206,10 @@ def calculate_supertrend(df, period=10, multiplier=3):
     df['h-l']=df['high']-df['low']; df['h-pc']=abs(df['high']-df['close'].shift(1)); df['l-pc']=abs(df['low']-df['close'].shift(1))
     df['tr']=df[['h-l','h-pc','l-pc']].max(axis=1); df['atr']=df['tr'].ewm(alpha=1/period, adjust=False).mean()
     hl2=(df['high']+df['low'])/2; df['upperband']=hl2+(multiplier*df['atr']); df['lowerband']=hl2-(multiplier*df['atr'])
-    df['final_upperband']=0.0; df['final_lowerband']=0.0; df['supertrend']=True; df['st_line']=0.0
+    df['final_upperband']=0.0; df['final_lowerband']=0.0; df['supertrend']=True; df['st_line']=0.0; df['st_dir']=0
     for i in range(len(df)):
         if i==0:
-            df.loc[df.index[i],'final_upperband']=df['upperband'].iloc[i]; df.loc[df.index[i],'final_lowerband']=df['lowerband'].iloc[i]; df.loc[df.index[i],'st_line']=df['upperband'].iloc[i]; continue
+            df.loc[df.index[i],'final_upperband']=df['upperband'].iloc[i]; df.loc[df.index[i],'final_lowerband']=df['lowerband'].iloc[i]; df.loc[df.index[i],'st_line']=df['upperband'].iloc[i]; df.loc[df.index[i],'st_dir']=1; continue
         if df['upperband'].iloc[i] < df['final_upperband'].iloc[i-1] or df['close'].iloc[i-1] > df['final_upperband'].iloc[i-1]: df.loc[df.index[i],'final_upperband']=df['upperband'].iloc[i]
         else: df.loc[df.index[i],'final_upperband']=df['final_upperband'].iloc[i-1]
         if df['lowerband'].iloc[i] > df['final_lowerband'].iloc[i-1] or df['close'].iloc[i-1] < df['final_lowerband'].iloc[i-1]: df.loc[df.index[i],'final_lowerband']=df['lowerband'].iloc[i]
@@ -210,7 +218,13 @@ def calculate_supertrend(df, period=10, multiplier=3):
         if prev_st and close_i < df['final_lowerband'].iloc[i]: df.loc[df.index[i],'supertrend']=False
         elif not prev_st and close_i > df['final_upperband'].iloc[i]: df.loc[df.index[i],'supertrend']=True
         else: df.loc[df.index[i],'supertrend']=prev_st
-        df.loc[df.index[i],'st_line']=df['final_lowerband'].iloc[i] if df['supertrend'].iloc[i] else df['final_upperband'].iloc[i]
+        # True = GREEN (bull), False = RED (bear)
+        if df['supertrend'].iloc[i]:
+            df.loc[df.index[i],'st_line']=df['final_lowerband'].iloc[i]
+            df.loc[df.index[i],'st_dir']=-1 # GREEN
+        else:
+            df.loc[df.index[i],'st_line']=df['final_upperband'].iloc[i]
+            df.loc[df.index[i],'st_dir']=1 # RED
     df['ema_val']=df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     return df
 
@@ -270,14 +284,20 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
                 if attempt==1:
                     if trade.get('tp1_hit'): WATCHLIST.pop(symbol,None); rmsg=f"❌ <b>SL BE HIT</b> {symbol} #{attempt}/3 🗑️"
                     else: WATCHLIST[symbol]['attempts']=1; WATCHLIST[symbol]['last_state']='reset'; WATCHLIST[symbol]['trigger_low']=None; rmsg=f"❌ <b>SL HIT</b> {symbol} #{attempt}/3 ⏳ Next #2"
-                elif attempt==2: WATCHLIST[symbol]['attempts']=2; WATCHLIST[symbol]['last_state']='wait_above_st'; WATCHLIST[symbol]['trigger_low']=None; rmsg=f"❌ <b>SL HIT</b> {symbol} #{attempt}/3 ⏳ Waiting ST above then break for #3"
-                else: WATCHLIST.pop(symbol,None); rmsg=f"❌ <b>SL HIT</b> {symbol} #{attempt}/3 🗑️ END"
+                elif attempt==2:
+                    WATCHLIST[symbol]['attempts']=2; WATCHLIST[symbol]['last_state']='wait_above_st'; WATCHLIST[symbol]['trigger_low']=None;
+                    rmsg=f"❌ <b>SL HIT</b> {symbol} #{attempt}/3 ⏳ Waiting ST above then break for #3"
+                else:
+                    WATCHLIST.pop(symbol,None);
+                    # 3HR COOLDOWN START
+                    cooldown_coins[symbol] = time.time() + 3*3600
+                    rmsg=f"❌ <b>SL HIT</b> {symbol} #{attempt}/3 🗑️ END - 3hr cooldown"
             await save_balance_data(client); await save_paper_trades(client); await save_watchlist(client)
             asyncio.create_task(send_telegram(client, rmsg))
     except Exception as e: print(f"check trades error {symbol}: {e}", flush=True)
 
 async def bot1_scan(client):
-    print("Bot1: Started", flush=True)
+    print("Bot1: Started v8.6 with 3hr cooldown", flush=True)
     while True:
         try:
             url="https://api.bybit.com/v5/market/tickers?category=linear"
@@ -292,6 +312,13 @@ async def bot1_scan(client):
                     if turnover < MIN_TURNOVER_24H: continue
                     async with _lock:
                         if ch >= PUMP_PERCENT_24H and s not in WATCHLIST:
+                            # COOLDOWN CHECK
+                            if s in cooldown_coins:
+                                if time.time() < cooldown_coins[s]:
+                                    continue
+                                else:
+                                    del cooldown_coins[s]
+                                    print(f"{s} cooldown over, re-adding", flush=True)
                             WATCHLIST[s]={'time':time.time(),'attempts':0,'last_state':'reset','trigger_low':None}; added+=1
                             asyncio.create_task(send_telegram(client, f"🚨 <b>40%+ PUMP</b> {s} +{ch:.2f}%"))
             if added>0: await save_watchlist(client)
@@ -311,6 +338,7 @@ async def process_symbol(client, symbol):
         close_closed=float(df_closed['close'].iloc[-1]); prev_close_closed=float(df_closed['close'].iloc[-2])
         ema_closed=float(df_closed['ema_val'].iloc[-1]); prev_ema_closed=float(df_closed['ema_val'].iloc[-2])
         st_closed=float(df_closed['st_line'].iloc[-1]); prev_st_closed=float(df_closed['st_line'].iloc[-2])
+        st_dir_closed=int(df_closed['st_dir'].iloc[-1]); prev_st_dir_closed=int(df_closed['st_dir'].iloc[-2])
 
         low_live=float(df_live['low'].iloc[-1])
 
@@ -324,7 +352,7 @@ async def process_symbol(client, symbol):
             active=sum(1 for t in PAPER_TRADES.values() if t.get('status')=='OPEN')
             should=False; exec_price=None; trig_for_msg=None
 
-            # ===== 2-STEP BREAK LOGIC FINAL =====
+            # ===== 2-STEP BREAK LOGIC V8.6 FINAL =====
             if att==0:
                 if WATCHLIST[symbol].get('trigger_low') is None:
                     is_cross = close_closed < ema_closed and prev_close_closed >= prev_ema_closed
@@ -340,12 +368,13 @@ async def process_symbol(client, symbol):
 
             elif att==1:
                 if WATCHLIST[symbol].get('trigger_low') is None:
-                    is_cross = st_closed < ema_closed and prev_st_closed >= prev_ema_closed
+                    # FIX V8.6 - ST must be RED
+                    is_cross = st_closed < ema_closed and prev_st_closed >= prev_ema_closed and st_dir_closed == 1
                     if is_cross:
                         WATCHLIST[symbol]['trigger_low']=low_closed
                         WATCHLIST[symbol]['last_state']='waiting_break_2'
                         changed=True
-                        asyncio.create_task(send_telegram(client, f"📌 <b>2nd Trigger Marked</b> {symbol} Low ${low_closed:.8f} - Waiting break x{PIP_SIZE}"))
+                        asyncio.create_task(send_telegram(client, f"📌 <b>2nd Trigger Marked</b> {symbol} Low ${low_closed:.8f} - Waiting break x{PIP_SIZE} [RED ST]"))
                 else:
                     trig=WATCHLIST[symbol]['trigger_low']
                     if low_live <= trig - (tick * PIP_SIZE):
@@ -353,15 +382,15 @@ async def process_symbol(client, symbol):
 
             elif att==2:
                 state=WATCHLIST[symbol].get('last_state','wait_above_st')
-                if state=='wait_above_st' and close_closed > st_closed:
+                if state=='wait_above_st' and close_closed > st_closed and st_dir_closed == 1: # FIX V8.6 - must be RED ST
                     WATCHLIST[symbol]['last_state']='ready_for_st_cross'; WATCHLIST[symbol]['trigger_low']=None; changed=True
                 elif state=='ready_for_st_cross' and WATCHLIST[symbol].get('trigger_low') is None:
-                    is_cross = close_closed < st_closed and prev_close_closed >= prev_st_closed
+                    is_cross = close_closed < st_closed and prev_close_closed >= prev_st_closed and st_dir_closed == 1
                     if is_cross:
                         WATCHLIST[symbol]['trigger_low']=low_closed
                         WATCHLIST[symbol]['last_state']='waiting_break_3'
                         changed=True
-                        asyncio.create_task(send_telegram(client, f"📌 <b>3rd Trigger Marked</b> {symbol} Low ${low_closed:.8f} - Waiting break"))
+                        asyncio.create_task(send_telegram(client, f"📌 <b>3rd Trigger Marked</b> {symbol} Low ${low_closed:.8f} - Waiting break [RED ST BREAK]"))
                 elif WATCHLIST[symbol].get('last_state')=='waiting_break_3' and WATCHLIST[symbol].get('trigger_low') is not None:
                     trig=WATCHLIST[symbol]['trigger_low']
                     if low_live <= trig - (tick * PIP_SIZE):
@@ -382,7 +411,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"process_symbol error {symbol}: {e}", flush=True); traceback.print_exc(); return False
 
 async def bot2_scan(client):
-    print("Bot2: Started v8.5 BREAK-WAIT", flush=True)
+    print("Bot2: Started v8.6 BREAK-WAIT + RED FILTER", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -393,7 +422,7 @@ async def bot2_scan(client):
         await asyncio.sleep(10)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.5 BREAK-WAIT 2-STEP","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v8.6 RED-FILTER+3HR-COOLDOWN","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -441,7 +470,7 @@ async def main_async():
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client))
         asyncio.create_task(bot2_scan(client))
-        print("v8.5 Operational", flush=True)
+        print("v8.6 Operational", flush=True)
         try:
             while True: await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
