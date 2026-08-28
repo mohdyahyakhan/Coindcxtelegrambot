@@ -1,4 +1,4 @@
-# COINDEX V8.7 FAST #1 - LIVE EMA BREAK ENTRY
+# COINDEX V8.7.2 FAST #1 - LIVE PRICE < EMA 300 = INSTANT ENTRY
 # #1: Live price < EMA 300 = Instant Entry | #2/#3: RED ST Filter + Break
 
 import threading, asyncio, httpx, time, os, json, pandas as pd, math, logging, traceback
@@ -105,7 +105,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v8.7 FAST #1 - Live EMA < 300 = Instant Entry", parse_mode="HTML")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v8.7.2 FAST #1 - Live Price < EMA300", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -195,6 +195,19 @@ async def get_tick_size(client, symbol):
             TICK_CACHE[symbol]=tick
             return tick
     except: return None
+    return None
+
+# === NEW FUNCTION FOR V8.7.2 - LIVE PRICE ===
+async def get_live_price(client, symbol):
+    url="https://api.bybit.com/v5/market/tickers"
+    by=symbol if symbol.endswith('USDT') else f"{symbol}USDT"
+    params={'category':'linear','symbol':by}
+    try:
+        res=await client.get(url, params=params, timeout=3.0)
+        data=res.json()
+        if data.get('retCode')==0 and data['result']['list']:
+            return float(data['result']['list'][0]['lastPrice'])
+    except: pass
     return None
 
 async def get_klines(client, symbol, interval='5', limit=400, include_current=False):
@@ -294,7 +307,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
     except Exception as e: print(f"check trades error {symbol}: {e}", flush=True)
 
 async def bot1_scan(client):
-    print("Bot1: Started v8.7 FAST #1", flush=True)
+    print("Bot1: Started v8.7.2 FAST #1", flush=True)
     while True:
         try:
             url="https://api.bybit.com/v5/market/tickers?category=linear"
@@ -350,14 +363,24 @@ async def process_symbol(client, symbol):
             active=sum(1 for t in PAPER_TRADES.values() if t.get('status')=='OPEN')
             should=False; exec_price=None; trig_for_msg=None
 
-            # ===== V8.7 LOGIC =====
+            # ===== V8.7.2 LOGIC - FIRST ENTRY RULE: current price < EMA 300 =====
             if att==0:
-                # FAST #1: Live price EMA 300 ke neeche = INSTANT ENTRY
-                if close_live < ema_live:
-                    should=True
-                    trig_for_msg=ema_live
-                    exec_price=price_to_tick(close_live, tick)
-                    # Note: No trigger_low wait for #1 now
+                # 1. Check karein ki pehla trade hai ya nahi
+                has_open_position = open_exists
+                if not has_open_position:
+                    # 2. Live price fetch karna (ticker se)
+                    live_price = await get_live_price(client, symbol)
+                    if live_price is None:
+                        live_price = close_live # fallback
+
+                    # 3. Define EMA 300 live
+                    ema_300_live = ema_live # EMA_PERIOD = 300 hai
+
+                    # 4. Dynamic EMA 300 check: Live price < EMA 300
+                    if live_price < ema_300_live:
+                        should=True
+                        trig_for_msg=ema_300_live
+                        exec_price=price_to_tick(live_price, tick)
 
             elif att==1:
                 if WATCHLIST[symbol].get('trigger_low') is None:
@@ -394,7 +417,7 @@ async def process_symbol(client, symbol):
                 WATCHLIST[symbol]['attempts']=cur; WATCHLIST[symbol]['last_state']='short'; WATCHLIST[symbol]['trigger_low']=None
                 PAPER_TRADES[symbol]={'entry':ep,'tp':tp,'sl':sl,'status':'OPEN','time':time.time(),'balance_at_entry':BALANCE_DATA['total_balance'],'trade_amount_usdt':tamt,'attempt':cur,'max_favorable_pnl_pct':0.0,'tp1_hit':False}
                 if cur==1:
-                    msg=f"⚡ <b>FAST SHORT #1 LIVE</b> {symbol} #{cur}/3\nEntry ${ep:.8f} (Live < EMA)\nEMA ${trig_for_msg:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)"
+                    msg=f"⚡ <b>FAST SHORT #1 LIVE</b> {symbol} #{cur}/3\nEntry ${ep:.8f} (Live < EMA300)\nEMA300 ${trig_for_msg:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)"
                 else:
                     msg=f"📝 <b>SHORT BREAK ENTRY</b> {symbol} #{cur}/3\nEntry ${ep:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)\nTrig Low ${trig_for_msg:.8f} break x{PIP_SIZE}"
                 new=True; changed=True
@@ -406,7 +429,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"process_symbol error {symbol}: {e}", flush=True); traceback.print_exc(); return False
 
 async def bot2_scan(client):
-    print("Bot2: Started v8.7 FAST #1", flush=True)
+    print("Bot2: Started v8.7.2 FAST #1", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -414,10 +437,10 @@ async def bot2_scan(client):
             results=await asyncio.gather(*[process_symbol(client, s) for s in syms])
             if any(results): await save_watchlist(client)
         except Exception as e: print(f"Bot2 Error: {e}", flush=True)
-        await asyncio.sleep(5) # #1 fast ke liye 5 sec
+        await asyncio.sleep(5)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.7 FAST #1 LIVE","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
+def home(): return jsonify({"status":"v8.7.2 FAST #1 LIVE PRICE < EMA300","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -465,7 +488,7 @@ async def main_async():
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client))
         asyncio.create_task(bot2_scan(client))
-        print("v8.7 FAST #1 Operational", flush=True)
+        print("v8.7.2 FAST #1 Operational", flush=True)
         try:
             while True: await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
