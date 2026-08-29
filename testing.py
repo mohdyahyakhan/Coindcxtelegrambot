@@ -1,5 +1,5 @@
-# COINDEX V8.7.3 FIXED - HTML Parse Bug Fixed - LIVE PRICE < EMA 300
-# #1: Live price < EMA 300 = Instant Entry | #2/#3: RED ST Filter + Break
+# COINDEX V8.7.4 - EMA 2 PIP ENTRY FIX
+# #1: Live price < EMA 300 = Instant Entry -> Entry Price = EMA - 2 Pip
 
 import threading, asyncio, httpx, time, os, json, pandas as pd, math, logging, traceback
 from decimal import Decimal, ROUND_DOWN
@@ -106,7 +106,7 @@ async def send_telegram(client, msg):
     except: pass
 
 async def start_command(u,c):
-    await u.message.reply_text("✅ Bot v8.7.3 FAST #1 - Live Price below EMA300 ACTIVE", parse_mode="HTML")
+    await u.message.reply_text("✅ Bot v8.7.4 EMA 2PIP FIX ACTIVE", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -307,7 +307,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
     except Exception as e: print(f"check trades error {symbol}: {e}", flush=True)
 
 async def bot1_scan(client):
-    print("Bot1: Started v8.7.3 FIXED", flush=True)
+    print("Bot1: Started v8.7.4", flush=True)
     while True:
         try:
             url="https://api.bybit.com/v5/market/tickers?category=linear"
@@ -354,6 +354,10 @@ async def process_symbol(client, symbol):
         changed=False; new=False; msg=None
         tick=await get_tick_size(client, symbol)
         if tick is None: return False
+
+        # Live price fetch outside lock (to avoid await inside lock)
+        live_price_for_check = await get_live_price(client, symbol)
+
         async with _lock:
             if symbol not in WATCHLIST: return False
             att=WATCHLIST[symbol].get('attempts',0)
@@ -361,17 +365,16 @@ async def process_symbol(client, symbol):
             active=sum(1 for t in PAPER_TRADES.values() if t.get('status')=='OPEN')
             should=False; exec_price=None; trig_for_msg=None
 
+            # ===== V8.7.4 FIXED LOGIC - EMA SE 2 PIP NEECHE =====
             if att==0:
-                has_open_position = open_exists
-                if not has_open_position:
-                    live_price = await get_live_price(client, symbol)
-                    if live_price is None:
-                        live_price = close_live
+                if not open_exists:
+                    live_price = live_price_for_check if live_price_for_check is not None else close_live
                     ema_300_live = ema_live
                     if live_price < ema_300_live:
                         should=True
                         trig_for_msg=ema_300_live
-                        exec_price=price_to_tick(live_price, tick)
+                        ema_break_price = ema_300_live - (tick * PIP_SIZE)
+                        exec_price=price_to_tick(ema_break_price, tick)
 
             elif att==1:
                 if WATCHLIST[symbol].get('trigger_low') is None:
@@ -408,7 +411,7 @@ async def process_symbol(client, symbol):
                 WATCHLIST[symbol]['attempts']=cur; WATCHLIST[symbol]['last_state']='short'; WATCHLIST[symbol]['trigger_low']=None
                 PAPER_TRADES[symbol]={'entry':ep,'tp':tp,'sl':sl,'status':'OPEN','time':time.time(),'balance_at_entry':BALANCE_DATA['total_balance'],'trade_amount_usdt':tamt,'attempt':cur,'max_favorable_pnl_pct':0.0,'tp1_hit':False}
                 if cur==1:
-                    msg=f"⚡ <b>FAST SHORT #1 LIVE</b> {symbol} #{cur}/3\nEntry ${ep:.8f} (Live below EMA300)\nEMA300 ${trig_for_msg:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)"
+                    msg=f"⚡ <b>FAST SHORT #1 LIVE</b> {symbol} #{cur}/3\nEntry ${ep:.8f} (EMA300 {PIP_SIZE} pip below)\nEMA300 ${trig_for_msg:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)"
                 else:
                     msg=f"📝 <b>SHORT BREAK ENTRY</b> {symbol} #{cur}/3\nEntry ${ep:.8f}\nTP ${tp:.8f} (-5%)\nSL ${sl:.8f} (+2%)\nTrig Low ${trig_for_msg:.8f} break x{PIP_SIZE}"
                 new=True; changed=True
@@ -420,7 +423,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"process_symbol error {symbol}: {e}", flush=True); traceback.print_exc(); return False
 
 async def bot2_scan(client):
-    print("Bot2: Started v8.7.3 FIXED", flush=True)
+    print("Bot2: Started v8.7.4", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -431,7 +434,7 @@ async def bot2_scan(client):
         await asyncio.sleep(5)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.7.3 FIXED LIVE PRICE below EMA300","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
+def home(): return jsonify({"status":"v8.7.4 EMA 2 PIP BELOW FIX","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -479,7 +482,7 @@ async def main_async():
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client))
         asyncio.create_task(bot2_scan(client))
-        print("v8.7.3 FAST #1 Operational", flush=True)
+        print("v8.7.4 Operational", flush=True)
         try:
             while True: await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
