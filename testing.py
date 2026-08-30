@@ -1,4 +1,4 @@
-# COINDEX V8.7.6 - LIVE TRIGGER + CLOSED EMA SYNC + UNBOUND FIX
+# COINDEX V8.7.7 - 1000 CANDLE LIVE SYNC + UNBOUND FIX
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, math, logging, traceback
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -112,7 +112,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v8.7.6 LIVE SYNC ACTIVE", parse_mode="HTML")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v8.7.7 1000 SYNC ACTIVE", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -174,7 +174,7 @@ async def close_command(u,c):
     if cl: await save_paper_trades(cl); await save_balance_data(cl); await save_watchlist(cl)
     await u.message.reply_text(f"Closed {s} PnL ${nusdt:.2f}", parse_mode="HTML")
 
-async def get_klines_bybit_async(client, symbol, interval='5', limit=400, include_current=False):
+async def get_klines_bybit_async(client, symbol, interval='5', limit=1000, include_current=False):
     url="https://api.bybit.com/v5/market/kline"
     by=symbol if symbol.endswith('USDT') else f"{symbol}USDT"
     params={'category':'linear','symbol':by,'interval':interval,'limit':limit}
@@ -214,7 +214,7 @@ async def get_live_price(client, symbol):
             return float(data['result']['list'][0]['lastPrice'])
     except: pass
     return None
-async def get_klines(client, symbol, interval='5', limit=400, include_current=False):
+async def get_klines(client, symbol, interval='5', limit=1000, include_current=False):
     return await get_klines_bybit_async(client, symbol, interval, limit, include_current)
 
 def calculate_supertrend(df, period=10, multiplier=3):
@@ -248,7 +248,7 @@ def calculate_supertrend(df, period=10, multiplier=3):
         if supertrend[i]: st_line[i] = final_lowerband[i]; st_dir[i] = -1
         else: st_line[i] = final_upperband[i]; st_dir[i] = 1
     df['st_line'] = st_line; df['st_dir'] = st_dir
-    df['ema_val'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
+    df['ema_val'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean() # Pine ta.ema = adjust=False
     return df
 
 async def check_paper_trades(client, df_live, df_closed, symbol):
@@ -317,7 +317,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
     except Exception as e: print(f"check trades error {symbol}: {e}", flush=True)
 
 async def bot1_scan(client):
-    print("Bot1: Started v8.7.6", flush=True)
+    print("Bot1: Started v8.7.7", flush=True)
     while True:
         try:
             url="https://api.bybit.com/v5/market/tickers?category=linear"
@@ -341,10 +341,9 @@ async def bot1_scan(client):
         except Exception as e: print(f"Bot1 Error: {e}", flush=True)
         await asyncio.sleep(60)
 
-# === V8.7.6 PATCHED process_symbol ===
 async def process_symbol(client, symbol):
     try:
-        df_live_raw=await get_klines(client, symbol, include_current=True, limit=402)
+        df_live_raw=await get_klines(client, symbol, include_current=True, limit=1000) # FIXED 402->1000
         if df_live_raw is None or len(df_live_raw) < EMA_PERIOD+2: return False
         df_closed_raw=df_live_raw.iloc[:-1].reset_index(drop=True)
         df_live=await asyncio.to_thread(calculate_supertrend, df_live_raw, ATR_PERIOD, ATR_MULTIPLIER)
@@ -381,7 +380,6 @@ async def process_symbol(client, symbol):
                     should = True
                     trig_for_msg = ema_ref
                     exec_price = ema_ref - (PIP_SIZE * tick)
-                    print(f"LIVE TRIGGER {symbol} Live:{live_price_for_check} < EMA:{ema_ref}", flush=True)
 
             elif att == 1:
                 if WATCHLIST[symbol].get('trigger_low') is None:
@@ -429,7 +427,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"process_symbol error {symbol}: {e}", flush=True); traceback.print_exc(); return False
 
 async def bot2_scan(client):
-    print("Bot2: Started v8.7.6", flush=True)
+    print("Bot2: Started v8.7.7", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -440,7 +438,7 @@ async def bot2_scan(client):
         await asyncio.sleep(5)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.7.6 LIVE SYNC PATCHED","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
+def home(): return jsonify({"status":"v8.7.7 1000 SYNC PATCHED","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -488,7 +486,7 @@ async def main_async():
         port = int(os.environ.get("PORT", 10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
-        print("v8.7.6 Operational", flush=True)
+        print("v8.7.7 Operational", flush=True)
         try:
             while True: await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
