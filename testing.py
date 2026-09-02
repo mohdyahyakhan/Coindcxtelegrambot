@@ -1,4 +1,4 @@
-# COINDEX V8.7.8 - 1000 CANDLE SYNC + ENTRY CANDLE SKIP + CLOSED TP/SL FIX
+# COINDEX V8.7.9.1 - 1000 CANDLE + 320s SKIP + CLOSED TP/SL + TP1 LOCK + RMSG SAFE
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, math, logging, traceback
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -112,7 +112,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v8.7.8 FINAL SYNC ACTIVE", parse_mode="HTML")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v8.7.9.1 TP1 LOCK + SAFE ACTIVE", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -252,29 +252,17 @@ def calculate_supertrend(df, period=10, multiplier=3):
     return df
 
 async def check_paper_trades(client, df_live, df_closed, symbol):
-    """
-    V8.7.8 FIX:
-    1. Skip entry candle evaluation (320 seconds delay after entry).
-    2. Use CLOSED candle high/low (df_closed) to avoid live intra-candle wick spikes.
-    3. Mandatory return after TP hit so SL check is not evaluated in the same cycle.
-    """
     try:
         async with _lock:
             if symbol not in PAPER_TRADES or PAPER_TRADES[symbol]['status']!= 'OPEN':
                 return
             trade = PAPER_TRADES[symbol].copy()
-
-        # FIX 1: Entry wali candle ko 1 bar (320 seconds) skip karo - Bybit close buffer
         if time.time() - trade.get('time', 0) < 320:
             return
-
-        # FIX 2: TP/SL ke liye CLOSED candle High/Low use karo (Intra-candle wick bug protection)
         clow = float(df_closed['low'].iloc[-1])
         chigh = float(df_closed['high'].iloc[-1])
-
         entry = trade['entry']
         attempt = trade.get('attempt', 1)
-
         if clow <= trade['tp']:
             amt = trade.get('trade_amount_usdt', trade['balance_at_entry'] * POSITION_SIZE_PERCENT)
             if attempt == 1 and not trade.get('tp1_hit'):
@@ -314,7 +302,6 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
                 await save_watchlist(client)
                 asyncio.create_task(send_telegram(client, f"✅ <b>100% TP HIT #{attempt}</b> {symbol} 🗑️"))
                 return
-
         if trade.get('tp1_hit') and attempt == 1:
             max_drop = ((entry - clow) / entry) * 100
             prev_max = trade.get('max_favorable_pnl_pct', 5.0)
@@ -330,8 +317,9 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
                                 PAPER_TRADES[symbol]['sl'] = new_sl
                                 PAPER_TRADES[symbol]['max_favorable_pnl_pct'] = max_drop
                         await save_paper_trades(client)
-
         if chigh >= trade['sl']:
+            # V8.7.9.1 FIX: Safe default init
+            rmsg = f"❌ <b>SL HIT</b> {symbol} #{attempt}/3"
             amt = trade.get('trade_amount_usdt', trade['balance_at_entry'] * POSITION_SIZE_PERCENT)
             ratio = 0.5 if (attempt == 1 and trade.get('tp1_hit')) else 1.0
             tamt = amt * ratio
@@ -369,12 +357,11 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
             await save_watchlist(client)
             asyncio.create_task(send_telegram(client, rmsg))
             return
-
     except Exception as e:
         print(f"check trades error {symbol}: {e}", flush=True)
 
 async def bot1_scan(client):
-    print("Bot1: Started v8.7.8", flush=True)
+    print("Bot1: Started v8.7.9.1", flush=True)
     while True:
         try:
             url="https://api.bybit.com/v5/market/tickers?category=linear"
@@ -406,14 +393,12 @@ async def process_symbol(client, symbol):
         df_live=await asyncio.to_thread(calculate_supertrend, df_live_raw, ATR_PERIOD, ATR_MULTIPLIER)
         df_closed=await asyncio.to_thread(calculate_supertrend, df_closed_raw, ATR_PERIOD, ATR_MULTIPLIER)
         await check_paper_trades(client, df_live, df_closed, symbol)
-
         low_live=float(df_live['low'].iloc[-1])
         close_closed=float(df_closed['close'].iloc[-1]); prev_close_closed=float(df_closed['close'].iloc[-2])
         ema_closed=float(df_closed['ema_val'].iloc[-1]); prev_ema_closed=float(df_closed['ema_val'].iloc[-2])
         st_closed=float(df_closed['st_line'].iloc[-1]); prev_st_closed=float(df_closed['st_line'].iloc[-2])
         st_dir_closed=int(df_closed['st_dir'].iloc[-1])
         low_closed=float(df_closed['low'].iloc[-1])
-
         changed=False; new=False; msg=None
         tick=await get_tick_size(client, symbol)
         if tick is None: return False
@@ -421,22 +406,25 @@ async def process_symbol(client, symbol):
         if raw_live is None: return False
         live_price_for_check = float(raw_live)
         ema_ref = float(ema_closed)
-
         async with _lock:
             if symbol not in WATCHLIST: return False
+            # V8.7.9.1 FIX: Race Condition & TP1 Active Trade Lock
+            pt = PAPER_TRADES.get(symbol)
+            if pt and pt.get('status') == 'OPEN' and pt.get('tp1_hit'):
+                return False
+            if WATCHLIST[symbol].get('attempts') == 1 and pt and pt.get('tp1_hit'):
+                return False
             att = WATCHLIST[symbol].get('attempts', 0)
-            open_exists = PAPER_TRADES.get(symbol) and PAPER_TRADES[symbol].get('status') == 'OPEN'
+            open_exists = pt and pt.get('status') == 'OPEN'
             active = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
             should = False
             exec_price = 0.0
             trig_for_msg = 0.0
-
             if att == 0:
                 if not open_exists and live_price_for_check < ema_ref:
                     should = True
                     trig_for_msg = ema_ref
                     exec_price = ema_ref - (PIP_SIZE * tick)
-
             elif att == 1:
                 if WATCHLIST[symbol].get('trigger_low') is None:
                     is_cross = st_closed < ema_closed and prev_st_closed >= prev_ema_closed and st_dir_closed == 1
@@ -449,7 +437,6 @@ async def process_symbol(client, symbol):
                     trig = WATCHLIST[symbol]['trigger_low']
                     if low_live <= trig - (tick * PIP_SIZE):
                         should = True; trig_for_msg = trig; exec_price = trig - (tick * PIP_SIZE)
-
             elif att == 2:
                 state = WATCHLIST[symbol].get('last_state', 'wait_above_st')
                 if state == 'wait_above_st' and close_closed > st_closed and st_dir_closed == 1:
@@ -463,7 +450,6 @@ async def process_symbol(client, symbol):
                     trig = WATCHLIST[symbol]['trigger_low']
                     if low_live <= trig - (tick * PIP_SIZE):
                         should = True; trig_for_msg = trig; exec_price = trig - (tick * PIP_SIZE)
-
             if should and att < 3 and not open_exists and active < MAX_OPEN_TRADES and exec_price > 0:
                 ep = price_to_tick(exec_price, tick); tp = price_to_tick(ep * (1 - TARGET_TP_PERCENT), tick); sl = price_to_tick(ep * (1 + EMERGENCY_SL_PERCENT), tick)
                 tamt = BALANCE_DATA['total_balance'] * POSITION_SIZE_PERCENT; cur = att + 1
@@ -483,7 +469,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"process_symbol error {symbol}: {e}", flush=True); traceback.print_exc(); return False
 
 async def bot2_scan(client):
-    print("Bot2: Started v8.7.8", flush=True)
+    print("Bot2: Started v8.7.9.1", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -494,7 +480,7 @@ async def bot2_scan(client):
         await asyncio.sleep(5)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.7.8 FINAL SYNC FIXED","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
+def home(): return jsonify({"status":"v8.7.9.1 LOCK+SAFE FIXED","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -542,7 +528,7 @@ async def main_async():
         port = int(os.environ.get("PORT", 10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
-        print("v8.7.8 Operational", flush=True)
+        print("v8.7.9.1 Operational", flush=True)
         try:
             while True: await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
