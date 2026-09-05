@@ -1,4 +1,4 @@
-# COINDEX V8.7.9.3 - PHANTOM FIX + WEBHOOK SECRET + SLIPPAGE + TICK SYNC
+# COINDEX V8.7.9.4 - PHANTOM + SECRET + SLIPPAGE + NO-OVERLAP FIX
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, math, logging, traceback
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -23,8 +23,8 @@ MIN_TURNOVER_24H = 2000000
 TAKER_FEE = 0.0005
 GST_RATE = 0.18
 EFFECTIVE_FEE_RATE = TAKER_FEE * (1 + GST_RATE)
-SLIPPAGE_PCT = 0.001 # V8.7.9.3 - 0.1% slippage for realistic fill
-MAX_DISTANCE_PCT = 0.005 # V8.7.9.3 - 0.5% guard against phantom fill
+SLIPPAGE_PCT = 0.001
+MAX_DISTANCE_PCT = 0.005
 WEBHOOK_SECRET = os.environ.get("TELEGRAM_SECRET", "change_this_secret_123")
 
 GIST_ID = os.environ.get("GIST_ID")
@@ -115,7 +115,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v8.7.9.3 PHANTOM+SECRET+SLIPPAGE FIXED", parse_mode="HTML")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v8.7.9.4 NO-OVERLAP FIXED", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -363,7 +363,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
         print(f"check trades error {symbol}: {e}", flush=True)
 
 async def bot1_scan(client):
-    print("Bot1: Started v8.7.9.3", flush=True)
+    print("Bot1: Started v8.7.9.4", flush=True)
     while True:
         try:
             url="https://api.bybit.com/v5/market/tickers?category=linear"
@@ -394,7 +394,10 @@ async def process_symbol(client, symbol):
         df_closed_raw=df_live_raw.iloc[:-1].reset_index(drop=True)
         df_live=await asyncio.to_thread(calculate_supertrend, df_live_raw, ATR_PERIOD, ATR_MULTIPLIER)
         df_closed=await asyncio.to_thread(calculate_supertrend, df_closed_raw, ATR_PERIOD, ATR_MULTIPLIER)
+
+        # V8.7.9.4 - CRITICAL: TP/SL check HAMESHA pehle, uske baad overlap block
         await check_paper_trades(client, df_live, df_closed, symbol)
+
         low_live=float(df_live['low'].iloc[-1])
         close_closed=float(df_closed['close'].iloc[-1]); prev_close_closed=float(df_closed['close'].iloc[-2])
         ema_closed=float(df_closed['ema_val'].iloc[-1]); prev_ema_closed=float(df_closed['ema_val'].iloc[-2])
@@ -408,29 +411,30 @@ async def process_symbol(client, symbol):
         if raw_live is None: return False
         live_price_for_check = float(raw_live)
         ema_ref = float(ema_closed)
+
         async with _lock:
             if symbol not in WATCHLIST: return False
+
+            # === V8.7.9.4 NO-OVERLAP FIX ===
             pt = PAPER_TRADES.get(symbol)
-            if pt and pt.get('status') == 'OPEN' and pt.get('tp1_hit'):
-                return False
-            if WATCHLIST[symbol].get('attempts') == 1 and pt and pt.get('tp1_hit'):
-                return False
-            att = WATCHLIST[symbol].get('attempts', 0)
             open_exists = pt and pt.get('status') == 'OPEN'
+            if open_exists:
+                # Agar #1 open hai to yaha se return - na trigger mark hoga, na naya entry
+                return False
+
+            att = WATCHLIST[symbol].get('attempts', 0)
             active = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
             should = False
             exec_price = 0.0
             trig_for_msg = 0.0
-            # V8.7.9.3 FIX: Use closed candle + distance guard
+
             if att == 0:
-                if not open_exists and close_closed < ema_closed:
+                if close_closed < ema_closed:
                     raw_exec = ema_ref - (PIP_SIZE * tick)
-                    # Guard: if live price too far from exec, skip phantom
                     if abs(live_price_for_check - raw_exec) / raw_exec > MAX_DISTANCE_PCT:
                         return False
                     should = True
                     trig_for_msg = ema_ref
-                    # Slippage: short fills slightly higher
                     exec_price = raw_exec * (1 + SLIPPAGE_PCT)
             elif att == 1:
                 if WATCHLIST[symbol].get('trigger_low') is None:
@@ -457,7 +461,7 @@ async def process_symbol(client, symbol):
                     trig = WATCHLIST[symbol]['trigger_low']
                     if low_live <= trig - (tick * PIP_SIZE):
                         should = True; trig_for_msg = trig; exec_price = (trig - (tick * PIP_SIZE)) * (1 + SLIPPAGE_PCT)
-            if should and att < 3 and not open_exists and active < MAX_OPEN_TRADES and exec_price > 0:
+            if should and att < 3 and active < MAX_OPEN_TRADES and exec_price > 0:
                 ep = price_to_tick(exec_price, tick); tp = price_to_tick(ep * (1 - TARGET_TP_PERCENT), tick); sl = price_to_tick(ep * (1 + EMERGENCY_SL_PERCENT), tick)
                 tamt = BALANCE_DATA['total_balance'] * POSITION_SIZE_PERCENT; cur = att + 1
                 WATCHLIST[symbol]['attempts'] = cur; WATCHLIST[symbol]['last_state'] = 'short'; WATCHLIST[symbol]['trigger_low'] = None
@@ -476,7 +480,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"process_symbol error {symbol}: {e}", flush=True); traceback.print_exc(); return False
 
 async def bot2_scan(client):
-    print("Bot2: Started v8.7.9.3", flush=True)
+    print("Bot2: Started v8.7.9.4", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -487,11 +491,10 @@ async def bot2_scan(client):
         await asyncio.sleep(5)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.7.9.3 PHANTOM+SECRET+SLIPPAGE FIXED","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
+def home(): return jsonify({"status":"v8.7.9.4 NO-OVERLAP FIXED","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # V8.7.9.3 FIX: Webhook secret security
         if WEBHOOK_SECRET!= "change_this_secret_123":
             secret_header = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
             if secret_header!= WEBHOOK_SECRET:
@@ -541,7 +544,7 @@ async def main_async():
         port = int(os.environ.get("PORT", 10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
-        print("v8.7.9.3 Operational", flush=True)
+        print("v8.7.9.4 Operational", flush=True)
         try:
             while True: await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
