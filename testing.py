@@ -1,4 +1,4 @@
-# COINDEX V8.7.9.4 - PHANTOM + SECRET + SLIPPAGE + NO-OVERLAP FIX
+# COINDEX V8.7.9.5 - PHANTOM + SECRET + SLIPPAGE + NO-OVERLAP + EXIT + RESETPNL
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, math, logging, traceback
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -115,7 +115,9 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v8.7.9.4 NO-OVERLAP FIXED", parse_mode="HTML")
+async def start_command(u,c):
+    await u.message.reply_text("✅ Bot v8.7.9.5 EXIT+RESET ADDED", parse_mode="HTML")
+
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -123,6 +125,7 @@ async def add_command(u,c):
         cl=c.bot_data.get("http_client")
         if cl: await save_watchlist(cl)
         await u.message.reply_text(f"✅ {s} added", parse_mode="HTML")
+
 async def remove_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -130,6 +133,7 @@ async def remove_command(u,c):
         cl=c.bot_data.get("http_client")
         if cl: await save_watchlist(cl)
         await u.message.reply_text(f"🗑️ {s} removed + cooldown cleared", parse_mode="HTML")
+
 async def watchlist_command(u,c):
     msg=""
     async with _lock:
@@ -143,15 +147,18 @@ async def watchlist_command(u,c):
                 msg+=f"{s} {rem:.1f}hr left\n"
     if not msg: msg="Empty"
     await u.message.reply_text(f"📋 Watchlist ({len(WATCHLIST)}):\n{msg}", parse_mode="HTML")
+
 async def open_command(u,c):
     async with _lock: o={k:v for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'}
     if not o: return await u.message.reply_text("No Open Trades", parse_mode="HTML")
     msg=f"📊 OPEN ({len(o)}/{MAX_OPEN_TRADES})\n\n"
     for s,t in o.items(): msg+=f"{s} #{t.get('attempt',1)}/3 Entry ${t['entry']:.8f}\n"
     await u.message.reply_text(msg, parse_mode="HTML")
+
 async def pnl_command(u,c):
     async with _lock: b=dict(BALANCE_DATA)
-    await u.message.reply_text(f"Balance: ${b['total_balance']:.2f} PnL: {b['lifetime_pnl_percent']:.2f}%", parse_mode="HTML")
+    await u.message.reply_text(f"Balance: ${b['total_balance']:.2f} PnL: {b['lifetime_pnl_percent']:.2f}% (${b['lifetime_pnl_usdt']:.2f})", parse_mode="HTML")
+
 async def close_command(u,c):
     if not c.args: return await u.message.reply_text("Use /close SYMBOL")
     s=c.args[0].upper().replace('.P','')
@@ -176,6 +183,91 @@ async def close_command(u,c):
         WATCHLIST.pop(s,None)
     if cl: await save_paper_trades(cl); await save_balance_data(cl); await save_watchlist(cl)
     await u.message.reply_text(f"Closed {s} PnL ${nusdt:.2f}", parse_mode="HTML")
+
+# ===== NEW COMMANDS V8.7.9.5 =====
+async def exit_command(u,c):
+    if not c.args:
+        return await u.message.reply_text("Use: <code>/exit SYMBOL</code> ya <code>/exit all</code>", parse_mode="HTML")
+    sym_arg = c.args[0].upper().replace('.P','')
+    if sym_arg == "ALL":
+        return await exitall_command(u,c)
+    c.args = [sym_arg]
+    await close_command(u,c)
+
+async def exitall_command(u,c):
+    cl = c.bot_data.get("http_client")
+    async with _lock:
+        open_syms = [k for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN']
+    if not open_syms:
+        return await u.message.reply_text("No Open Trades to exit", parse_mode="HTML")
+    total_pnl = 0
+    closed_count = 0
+    for s in open_syms:
+        try:
+            async with _lock:
+                tr = PAPER_TRADES.get(s,{}).copy()
+                if tr.get('status')!='OPEN': continue
+            df = await get_klines(cl, s, include_current=True)
+            if df is None: continue
+            ep = df['close'].iloc[-1]
+            async with _lock:
+                ratio = 0.5 if tr.get('tp1_hit') else 1.0
+                amt = tr.get('trade_amount_usdt', tr['balance_at_entry']*POSITION_SIZE_PERCENT)*ratio
+                gpct = ((tr['entry']-ep)/tr['entry'])*100; gusdt = amt*gpct/100
+                fee = amt*EFFECTIVE_FEE_RATE + max(0,amt+gusdt)*EFFECTIVE_FEE_RATE; nusdt = gusdt-fee
+                BALANCE_DATA['total_balance']+=nusdt
+                BALANCE_DATA['lifetime_pnl_usdt']=BALANCE_DATA['total_balance']-BALANCE_DATA['starting_balance']
+                BALANCE_DATA['lifetime_pnl_percent']=(BALANCE_DATA['lifetime_pnl_usdt']/BALANCE_DATA['starting_balance'])*100
+                PAPER_TRADES[s]['status']='CLOSED_EXITALL'
+                PAPER_TRADES[s]['pnl_percent']=round((nusdt/amt)*100,2) if amt>0 else 0
+                PAPER_TRADES[s]['pnl_usdt']=round(nusdt,2)
+                PAPER_TRADES[s]['exit_price']=ep
+                WATCHLIST.pop(s,None)
+                total_pnl += nusdt
+                closed_count += 1
+        except: pass
+    if cl:
+        await save_paper_trades(cl); await save_balance_data(cl); await save_watchlist(cl)
+    await u.message.reply_text(f"💥 <b>EXIT ALL DONE</b>\nClosed: {closed_count} coins\nTotal PnL: ${total_pnl:.2f}\nBalance: ${BALANCE_DATA['total_balance']:.2f}", parse_mode="HTML")
+
+async def resetpnl_command(u,c):
+    # Support both /resetpnl confirm and /reset pnl confirm
+    if not c.args or c.args[0].lower()!= "confirm":
+        # check if second arg is confirm (for /reset pnl confirm case)
+        if len(c.args)>=2 and c.args[1].lower()=="confirm":
+            pass
+        else:
+            return await u.message.reply_text(
+                "⚠️ <b>Reset PnL?</b>\nYe aapka saara PnL 0 kar dega aur balance wapas $10000 pe le jayega + saare trades clear honge.\n\nConfirm karne ke liye bhejo:\n<code>/resetpnl confirm</code>", parse_mode="HTML")
+    async with _lock:
+        BALANCE_DATA['total_balance'] = BALANCE_DATA['starting_balance']
+        BALANCE_DATA['lifetime_pnl_usdt'] = 0.0
+        BALANCE_DATA['lifetime_pnl_percent'] = 0.0
+        PAPER_TRADES.clear()
+        WATCHLIST.clear()
+        cooldown_coins.clear()
+    cl = c.bot_data.get("http_client")
+    if cl:
+        await save_balance_data(cl); await save_paper_trades(cl); await save_watchlist(cl)
+    await u.message.reply_text("✅ <b>PNL RESET DONE</b>\nBalance -> $10000\nAll trades + watchlist cleared", parse_mode="HTML")
+
+async def help_command(u,c):
+    msg = """📋 <b>COINDEX V8.7.9.5 Commands:</b>
+
+<code>/watchlist</code> - Sab coin dekho
+<code>/open</code> - Open trades dekho
+<code>/pnl</code> - Profit/Loss dekho
+<code>/add BTCUSDT</code> - Coin add karo
+<code>/remove BTCUSDT</code> - Coin hatao
+<code>/close SYMBOL</code> - Ek position band karo
+<code>/exit SYMBOL</code> - Ek position exit (same as close)
+<code>/exit all</code> - Saari positions ek saath exit
+<code>/exitall</code> - Saari positions exit
+<code>/resetpnl confirm</code> - Paper PnL reset + all clear
+<code>/reset pnl confirm</code> - Same reset
+<code>/help</code> - Ye list dekho
+"""
+    await u.message.reply_text(msg, parse_mode="HTML")
 
 async def get_klines_bybit_async(client, symbol, interval='5', limit=1000, include_current=False):
     url="https://api.bybit.com/v5/market/kline"
@@ -363,7 +455,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
         print(f"check trades error {symbol}: {e}", flush=True)
 
 async def bot1_scan(client):
-    print("Bot1: Started v8.7.9.4", flush=True)
+    print("Bot1: Started v8.7.9.5", flush=True)
     while True:
         try:
             url="https://api.bybit.com/v5/market/tickers?category=linear"
@@ -394,10 +486,7 @@ async def process_symbol(client, symbol):
         df_closed_raw=df_live_raw.iloc[:-1].reset_index(drop=True)
         df_live=await asyncio.to_thread(calculate_supertrend, df_live_raw, ATR_PERIOD, ATR_MULTIPLIER)
         df_closed=await asyncio.to_thread(calculate_supertrend, df_closed_raw, ATR_PERIOD, ATR_MULTIPLIER)
-
-        # V8.7.9.4 - CRITICAL: TP/SL check HAMESHA pehle, uske baad overlap block
         await check_paper_trades(client, df_live, df_closed, symbol)
-
         low_live=float(df_live['low'].iloc[-1])
         close_closed=float(df_closed['close'].iloc[-1]); prev_close_closed=float(df_closed['close'].iloc[-2])
         ema_closed=float(df_closed['ema_val'].iloc[-1]); prev_ema_closed=float(df_closed['ema_val'].iloc[-2])
@@ -411,23 +500,17 @@ async def process_symbol(client, symbol):
         if raw_live is None: return False
         live_price_for_check = float(raw_live)
         ema_ref = float(ema_closed)
-
         async with _lock:
             if symbol not in WATCHLIST: return False
-
-            # === V8.7.9.4 NO-OVERLAP FIX ===
             pt = PAPER_TRADES.get(symbol)
             open_exists = pt and pt.get('status') == 'OPEN'
             if open_exists:
-                # Agar #1 open hai to yaha se return - na trigger mark hoga, na naya entry
                 return False
-
             att = WATCHLIST[symbol].get('attempts', 0)
             active = sum(1 for t in PAPER_TRADES.values() if t.get('status') == 'OPEN')
             should = False
             exec_price = 0.0
             trig_for_msg = 0.0
-
             if att == 0:
                 if close_closed < ema_closed:
                     raw_exec = ema_ref - (PIP_SIZE * tick)
@@ -480,7 +563,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"process_symbol error {symbol}: {e}", flush=True); traceback.print_exc(); return False
 
 async def bot2_scan(client):
-    print("Bot2: Started v8.7.9.4", flush=True)
+    print("Bot2: Started v8.7.9.5", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -491,7 +574,7 @@ async def bot2_scan(client):
         await asyncio.sleep(5)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.7.9.4 NO-OVERLAP FIXED","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
+def home(): return jsonify({"status":"v8.7.9.5 EXIT+RESET","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -525,7 +608,7 @@ async def main_async():
         app_t = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"] = client
         application = app_t
-        for cmd, fn in [("start", start_command), ("add", add_command), ("remove", remove_command), ("watchlist", watchlist_command), ("open", open_command), ("close", close_command), ("pnl", pnl_command)]:
+        for cmd, fn in [("start", start_command), ("add", add_command), ("remove", remove_command), ("watchlist", watchlist_command), ("open", open_command), ("close", close_command), ("pnl", pnl_command), ("exit", exit_command), ("exitall", exitall_command), ("resetpnl", resetpnl_command), ("reset", resetpnl_command), ("help", help_command)]:
             app_t.add_handler(CommandHandler(cmd, fn))
         await app_t.initialize(); await app_t.start()
         asyncio.create_task(process_webhook_queue())
@@ -544,7 +627,7 @@ async def main_async():
         port = int(os.environ.get("PORT", 10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
-        print("v8.7.9.4 Operational", flush=True)
+        print("v8.7.9.5 Operational", flush=True)
         try:
             while True: await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
