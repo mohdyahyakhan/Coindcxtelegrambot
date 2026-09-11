@@ -1,4 +1,4 @@
-# COINDEX V8.8.1 - SL FIX + NO #3 ATTEMPT - Based on your V8.8.0
+# COINDEX V8.8.2 - NSE ORB FIX + SL 3.5% + NO #3 + MANUAL /nseorb
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, math, logging, traceback, pytz
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -14,7 +14,7 @@ logging.getLogger('werkzeug').setLevel(logging.ERROR)
 PUMP_PERCENT_24H = 40
 TRIGGER_TICKS = 2
 TARGET_TP_PERCENT = 0.05
-EMERGENCY_SL_PERCENT = 0.035 # FIXED: 2% -> 3.5% (tight SL ka solution)
+EMERGENCY_SL_PERCENT = 0.035
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
 EMA_PERIOD = 300
@@ -22,7 +22,7 @@ POSITION_SIZE_PERCENT = 0.20
 WATCHLIST_DAYS = 2
 MAX_OPEN_TRADES = 4
 MIN_TURNOVER_24H = 2000000
-ENABLE_ATTEMPT_3 = False # FIXED: #3 band - sirf #1 #2 chalega, isiliye SL kam honge
+ENABLE_ATTEMPT_3 = False
 TAKER_FEE = 0.0005
 GST_RATE = 0.18
 EFFECTIVE_FEE_RATE = TAKER_FEE * (1 + GST_RATE)
@@ -119,7 +119,7 @@ async def send_telegram(client, msg):
     try: await client.post(url, json=payload, timeout=10.0)
     except: pass
 
-async def start_command(u,c): await u.message.reply_text("✅ Bot v8.8.1 SL FIX - 3.5% SL + NO #3 + LIVE ST", parse_mode="HTML")
+async def start_command(u,c): await u.message.reply_text("✅ Bot v8.8.2 NSE FIX - 3.5% SL + NO #3 + /nseorb", parse_mode="HTML")
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
@@ -144,9 +144,11 @@ async def watchlist_command(u,c):
             msg+="\n⏳ Cooldown:\n"
             for s,ts in cooldown_coins.items():
                 rem=max(0,(ts-time.time())/3600); msg+=f"{s} {rem:.1f}hr\n"
+        msg+=f"\n📊 NSE ORB: {len(ORB_LEVELS)} stocks\n"
         if ORB_LEVELS:
-            msg+=f"\n📊 NSE ORB: {len(ORB_LEVELS)}\n"
             for k,v in list(ORB_LEVELS.items())[:5]: msg+=f"{k} H:{v['high']:.1f} L:{v['low']:.1f}\n"
+        else:
+            msg+=f"Empty - /nseorb se banao\n"
     if not msg: msg="Empty"
     await u.message.reply_text(f"📋 Watchlist ({len(WATCHLIST)}):\n{msg}", parse_mode="HTML")
 async def open_command(u,c):
@@ -217,7 +219,26 @@ async def resetpnl_command(u,c):
     if cl: await save_balance_data(cl); await save_paper_trades(cl); await save_watchlist(cl)
     await u.message.reply_text("✅ PNL RESET DONE Balance $10000", parse_mode="HTML")
 async def help_command(u,c):
-    await u.message.reply_text("📋 <b>V8.8.1 SL FIX</b>\nSL 3.5% | No #3 | <code>/watchlist</code> <code>/open</code> <code>/pnl</code>", parse_mode="HTML")
+    await u.message.reply_text("📋 <b>V8.8.2 NSE FIX</b>\nSL 3.5% | No #3 | <code>/watchlist</code> <code>/nseorb</code> <code>/pnl</code>", parse_mode="HTML")
+async def nseorb_command(u,c):
+    global ORB_LEVELS
+    await u.message.reply_text("⏳ NSE ORB manual calc... 20 stocks ~30 sec", parse_mode="HTML")
+    ORB_LEVELS.clear()
+    count=0; failed=[]
+    for sym in STOCKS_NSE:
+        for retry in range(3):
+            orb = await asyncio.to_thread(get_nse_orb_sync, sym)
+            if orb: ORB_LEVELS[sym]=orb; count+=1; break
+            await asyncio.sleep(1)
+        if sym not in ORB_LEVELS: failed.append(sym)
+        await asyncio.sleep(0.3)
+    msg = f"📊 <b>NSE ORB READY MANUAL</b> {count}/{len(STOCKS_NSE)}\n"
+    if ORB_LEVELS:
+        for k,v in list(ORB_LEVELS.items())[:10]: msg+=f"{k} H:{v['high']:.1f} L:{v['low']:.1f}\n"
+    if failed: msg+=f"\nFailed: {','.join(failed[:5])}"
+    await u.message.reply_text(msg, parse_mode="HTML")
+    cl=c.bot_data.get("http_client")
+    if cl: await save_watchlist(cl)
 
 async def get_klines_bybit_async(client, symbol, interval='5', limit=1000, include_current=False):
     url="https://api.bybit.com/v5/market/kline"
@@ -355,7 +376,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
     except Exception as e: print(f"check trades error {symbol}: {e}", flush=True)
 
 async def bot1_scan(client):
-    print("Bot1: Started v8.8.1", flush=True)
+    print("Bot1: Started v8.8.2", flush=True)
     while True:
         try:
             url="https://api.bybit.com/v5/market/tickers?category=linear"
@@ -402,9 +423,7 @@ async def process_symbol(client, symbol):
             pt = PAPER_TRADES.get(symbol); open_exists = pt and pt.get('status') == 'OPEN'
             if open_exists: return False
             att = WATCHLIST[symbol].get('attempts', 0)
-            # NO #3 LOGIC: agar 2 attempt ho gaye to skip
             if att >= 2 and not ENABLE_ATTEMPT_3:
-                # 2 fail ke baad cooldown
                 if WATCHLIST[symbol].get('last_state') == 'wait_above_st':
                     WATCHLIST.pop(symbol, None)
                     cooldown_coins[symbol] = time.time() + 3*3600
@@ -435,10 +454,7 @@ async def process_symbol(client, symbol):
                     if low_live <= trig - (tick * TRIGGER_TICKS): should = True; trig_for_msg = trig; exec_price = (trig - (tick * TRIGGER_TICKS)) * (1 - SLIPPAGE_PCT)
             elif att == 2:
                 if not ENABLE_ATTEMPT_3:
-                    WATCHLIST.pop(symbol, None)
-                    cooldown_coins[symbol] = time.time() + 3*3600
-                    changed = True
-                    return changed
+                    WATCHLIST.pop(symbol, None); cooldown_coins[symbol] = time.time() + 3*3600; changed = True; return changed
                 state = WATCHLIST[symbol].get('last_state', 'wait_above_st')
                 if state == 'wait_above_st' and live_price_for_check > st_live and st_dir_live == -1:
                     WATCHLIST[symbol]['last_state'] = 'ready_for_st_cross'; WATCHLIST[symbol]['trigger_low'] = None; changed = True
@@ -461,7 +477,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"process_symbol error {symbol}: {e}", flush=True); return False
 
 async def bot2_scan(client):
-    print("Bot2: Started v8.8.1 SL FIX", flush=True)
+    print("Bot2: Started v8.8.2", flush=True)
     while True:
         try:
             async with _lock: syms=list(WATCHLIST.keys())
@@ -479,7 +495,9 @@ def get_nse_orb_sync(symbol):
         df = df.between_time("09:15","09:29")
         if df.empty or len(df)<2: return None
         return {"high": float(df['High'].max()), "low": float(df['Low'].min())}
-    except: return None
+    except Exception as e:
+        print(f"NSE ORB fetch fail {symbol}: {e}", flush=True)
+        return None
 def get_nse_last_sync(symbol):
     try:
         df = yf.download(symbol+".NS", period="1d", interval="1m", progress=False, auto_adjust=True)
@@ -492,21 +510,27 @@ def get_nse_last_sync(symbol):
     except: return None, None
 
 async def bot3_nse_orb_async(client):
-    print("Bot3 NSE ORB: Started v8.8.1", flush=True)
+    print("Bot3 NSE ORB: Started v8.8.2 FIX", flush=True)
     global ORB_LEVELS, NSE_SIGNALS_TODAY
     while True:
         try:
             now_ist = datetime.now(IST)
-            if now_ist.weekday() < 5 and 9 <= now_ist.hour <= 11:
-                if now_ist.hour == 9 and 31 <= now_ist.minute <= 32 and not ORB_LEVELS:
-                    print("Bot3: Calculating ORB levels...", flush=True)
-                    for sym in STOCKS_NSE:
-                        orb = await asyncio.to_thread(get_nse_orb_sync, sym)
-                        if orb: ORB_LEVELS[sym] = orb
-                        await asyncio.sleep(0.3)
-                    if ORB_LEVELS:
-                        await send_telegram(client, f"📊 <b>NSE ORB READY v8.8.1</b>\n{len(ORB_LEVELS)} stocks")
-                        print(f"Bot3 ORB Ready: {len(ORB_LEVELS)}", flush=True)
+            if now_ist.weekday() < 5:
+                # FIX: 9:15 se 10:00 tak har 10 min try jab tak empty hai
+                if not ORB_LEVELS and 9 <= now_ist.hour <= 10:
+                    if now_ist.minute % 10 == 1 or now_ist.minute % 10 == 2:
+                        print(f"Bot3: Retrying ORB at {now_ist} - empty {len(ORB_LEVELS)}", flush=True)
+                        temp={}
+                        for sym in STOCKS_NSE:
+                            for r in range(3):
+                                orb = await asyncio.to_thread(get_nse_orb_sync, sym)
+                                if orb: temp[sym]=orb; break
+                                await asyncio.sleep(1)
+                            await asyncio.sleep(0.3)
+                        if temp:
+                            ORB_LEVELS.update(temp)
+                            await send_telegram(client, f"📊 <b>NSE ORB READY v8.8.2 FIX</b> {len(ORB_LEVELS)}/{len(STOCKS_NSE)} stocks\nUse /nseorb to recalc")
+                            print(f"Bot3 ORB Ready: {len(ORB_LEVELS)}", flush=True)
                 if ORB_LEVELS:
                     is_market_window = (now_ist.hour == 9 and now_ist.minute >= 31) or (now_ist.hour == 10) or (now_ist.hour == 11 and now_ist.minute <= 5)
                     if is_market_window:
@@ -523,13 +547,15 @@ async def bot3_nse_orb_async(client):
                                 await send_telegram(client, f"🔻 <b>NSE SHORT</b> {sym}\nPrice: {close_price:.2f}\nORB Low: {lv['low']:.2f} Break\nVWAP: {vwap:.2f}\nSL: {lv['high']:.2f}")
                                 ORB_LEVELS.pop(sym, None)
                             await asyncio.sleep(0.5)
-                if now_ist.hour == 12 and ORB_LEVELS: ORB_LEVELS.clear()
+                if now_ist.hour == 12 and 10 <= now_ist.minute <= 12 and ORB_LEVELS:
+                    await send_telegram(client, f"📊 <b>NSE EOD</b> No more signals. ORB was {len(ORB_LEVELS)} left")
+                    ORB_LEVELS.clear()
                 if now_ist.hour == 9 and now_ist.minute < 10: NSE_SIGNALS_TODAY.clear()
         except Exception as e: print(f"Bot3 Error: {e}", flush=True)
         await asyncio.sleep(60)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.8.1 SL FIX 3.5% NO#3","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins),"nse_orb":len(ORB_LEVELS)})
+def home(): return jsonify({"status":"v8.8.2 NSE FIX","watchlist":len(WATCHLIST),"cooldown":len(cooldown_coins),"nse_orb":len(ORB_LEVELS)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -560,7 +586,7 @@ async def main_async():
         app_t = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"] = client
         application = app_t
-        for cmd, fn in [("start", start_command), ("add", add_command), ("remove", remove_command), ("watchlist", watchlist_command), ("open", open_command), ("close", close_command), ("pnl", pnl_command), ("exit", exit_command), ("exitall", exitall_command), ("resetpnl", resetpnl_command), ("reset", resetpnl_command), ("help", help_command)]:
+        for cmd, fn in [("start", start_command), ("add", add_command), ("remove", remove_command), ("watchlist", watchlist_command), ("open", open_command), ("close", close_command), ("pnl", pnl_command), ("exit", exit_command), ("exitall", exitall_command), ("resetpnl", resetpnl_command), ("reset", resetpnl_command), ("help", help_command), ("nseorb", nseorb_command)]:
             app_t.add_handler(CommandHandler(cmd, fn))
         await app_t.initialize(); await app_t.start()
         asyncio.create_task(process_webhook_queue())
@@ -579,7 +605,7 @@ async def main_async():
         port = int(os.environ.get("PORT", 10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0', port=port, use_reloader=False), daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client)); asyncio.create_task(bot3_nse_orb_async(client))
-        print("v8.8.1 SL FIX Operational", flush=True)
+        print("v8.8.2 NSE FIX Operational", flush=True)
         try:
             while True: await asyncio.sleep(3600)
         except (KeyboardInterrupt, SystemExit):
