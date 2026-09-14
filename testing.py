@@ -11,13 +11,13 @@ app = Flask(__name__)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 # --- V8.8.5 CONFIG ---
-PUMP_PERCENT_24H = 35 # 40 -> 35 early entry
+PUMP_PERCENT_24H = 40
 TRIGGER_TICKS = 2
 TARGET_TP_PERCENT = 0.07 # 5% -> 7% BETTER R:R
 EMERGENCY_SL_PERCENT = 0.025 # 3.5% -> 2.5% BETTER R:R
 ATR_PERIOD = 10
 ATR_MULTIPLIER = 3
-EMA_PERIOD = 200 # 300 -> 200 faster signal
+EMA_PERIOD = 300
 POSITION_SIZE_PERCENT = 0.20
 WATCHLIST_DAYS = 2
 MAX_OPEN_TRADES = 4
