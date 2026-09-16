@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 app = Flask(__name__)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-PUMP_PERCENT_24H = 35
+PUMP_PERCENT_24H = 40
 TRIGGER_TICKS = 2
 TARGET_TP_PERCENT = 0.10
 EMERGENCY_SL_PERCENT = 0.05
