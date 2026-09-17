@@ -161,7 +161,8 @@ async def send_telegram(client, msg):
     except: pass
 
 @authorized_only
-async def start_command(u,c): await u.message.reply_text("✅ Bot v8.8.10 | 3 ENTRY ST<EMA300 10% TP 5% SL | BOT3 7 WINNERS EOD 3:10 PM SAME", parse_mode="HTML")
+async def start_command(u,c): 
+    await u.message.reply_text("✅ Bot v8.8.10 | 3 ENTRY ST<EMA300 | TP 10% SL 5% | BOT3 7 WINNERS EOD 3:10 PM SAME")
 @authorized_only
 async def add_command(u,c):
     if c.args:
