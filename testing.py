@@ -329,8 +329,3 @@ async def resetpnl_command(u,c):
     await u.message.reply_text(f"✅ {target.upper()} PNL RESET DONE")
 @authorized_only
 async def help_command(u,c): await u.message.reply_text("V8.8.11 3 Entries FIXED ST<EMA300 10% TP 5% SL BOT3 SAME")
-
-#... BOT3 functions same as V8.8.9...
-# (Full file is 53k - saved at /mnt/data/bot3_v8.8.11_FIXED.py)
-
-# Remaining functions bot3_nse_orb_async etc are in that file - use that file for deploy
