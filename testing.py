@@ -433,7 +433,12 @@ def calculate_supertrend(df, period=10, multiplier=3):
         else: supertrend[i]=prev_st
         if supertrend[i]: st_line[i]=final_lowerband[i]; st_dir[i]=-1
         else: st_line[i]=final_upperband[i]; st_dir[i]=1
-    df['st_line']=st_line; df['st_dir']=st_dir; df['ema_val']=df['close'].ewm(span=EMA_PERIOD, adjust=False).mean(); df['atr']=atr; return df
+    df['st_line']=st_line; df['st_dir']=st_dir
+    # === EMA 300 + SMA 9 SMOOTHING - EXACT AS PER CHART SCREENSHOT ===
+    # Chart: Length 300, Source close, Smoothing Line SMA, Smoothing Length 9
+    base_ema = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
+    df['ema_val'] = base_ema.rolling(window=9).mean()
+    df['atr']=atr; return df
 
 async def check_paper_trades(client, df_live, df_closed, symbol):
     try:
