@@ -1,4 +1,4 @@
-# COINDEX V8.8.26 FINAL - 4.3GB/mo FIT - V8.8.22 BASE + BOT3 OFF + 15MIN GRACE
+# COINDEX V8.8.27 FINAL - 3.2GB/mo DYNAMIC GRACE + SAFETY PATCH
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, logging, pytz, functools
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -20,13 +20,19 @@ POSITION_SIZE_PERCENT = 0.20
 WATCHLIST_DAYS = 2
 MAX_OPEN_TRADES = 4
 MIN_TURNOVER_24H = 10000000
-BOT1_SCAN_INTERVAL = 300 # FINAL: 90->300 5min
+BOT1_SCAN_INTERVAL = 300
 BOT2_SCAN_INTERVAL = 30
-KLINE_LIMIT = 200 # FINAL: 350->200
-KLINE_CACHE_TTL = 600 # FINAL: 240->600 10min
-LIVE_PRICE_CACHE_TTL = 60 # FINAL: 30->60 1min
-GRACE_AFTER_PUMP = 900 # 15min grace
+KLINE_LIMIT = 200
+KLINE_CACHE_TTL = 600
+LIVE_PRICE_CACHE_TTL = 60
+GRACE_AFTER_PUMP = 1800 # V8.8.27: 15min -> 30min base
 BOT12_STARTING_BALANCE = 10000.0
+
+def get_grace_by_pump(pump_pct):
+    if pump_pct >= 100: return 3600 # 60 min monsters like LONGXIA
+    elif pump_pct >= 60: return 2400 # 40 min
+    else: return 1800 # 30 min base 40-60%
+
 TAKER_FEE = 0.0005
 GST_RATE = 0.18
 EFFECTIVE_FEE_RATE = TAKER_FEE * (1 + GST_RATE)
@@ -116,6 +122,7 @@ async def load_watchlist(c):
                     WATCHLIST[cs].setdefault('attempts',0)
                     WATCHLIST[cs].setdefault('trigger_low',None)
                     WATCHLIST[cs].setdefault('skip_until',0)
+                    WATCHLIST[cs].setdefault('pump_pct',0) # V8.8.27 SAFETY PATCH - DeepSeek
 
 async def load_paper_trades(c):
     global PAPER_TRADES
@@ -136,15 +143,15 @@ async def send_telegram(client, msg):
     except: pass
 
 @authorized_only
-async def start_command(u,c): await u.message.reply_text("V8.8.26 FINAL 4.3GB/mo - FIT")
+async def start_command(u,c): await u.message.reply_text("V8.8.27 FINAL 3.2GB/mo Dynamic Grace - FIT")
 @authorized_only
 async def add_command(u,c):
     if c.args:
         s=c.args[0].upper().replace('.P','')
-        async with _lock: WATCHLIST[s]={'time':time.time(),'skip_until':time.time()+GRACE_AFTER_PUMP,'attempts':0,'last_state':'reset','trigger_low':None}
+        async with _lock: WATCHLIST[s]={'time':time.time(),'skip_until':time.time()+GRACE_AFTER_PUMP,'attempts':0,'last_state':'reset','trigger_low':None,'pump_pct':0}
         cl=c.bot_data.get("http_client")
         if cl: await save_watchlist(cl)
-        await u.message.reply_text(f"{s} added 15m grace")
+        await u.message.reply_text(f"{s} added 30m grace")
 @authorized_only
 async def remove_command(u,c):
     if c.args:
@@ -161,12 +168,12 @@ async def watchlist_command(u,c):
             skip = d.get('skip_until',0)
             grace=f" {int((skip-now)/60)}m grace" if skip>now else ""
             msg+=f"{s} #{d.get('attempts',0)+1} {d.get('last_state')}{grace}\n"
-    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.26 FINAL:\n{msg}")
+    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.27 FINAL:\n{msg}")
 @authorized_only
 async def health_command(u,c):
     async with _lock: b12=dict(BOT12_BALANCE_DATA); wl=len(WATCHLIST); open_c=len([k for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'])
     now=time.time(); b1_age=int(now-BOT1_LAST_SCAN) if BOT1_LAST_SCAN else 999; b2_age=int(now-BOT2_LAST_SCAN) if BOT2_LAST_SCAN else 999
-    await u.message.reply_text(f"HEALTH V8.8.26 FINAL 4.3GB/mo\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 30s ActiveStrict+15m\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
+    await u.message.reply_text(f"HEALTH V8.8.27 FINAL 3.2GB/mo\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 30s ActiveStrict+Dynamic\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
 @authorized_only
 async def open_command(u,c):
     async with _lock: o={k:v for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'}
@@ -177,7 +184,7 @@ async def open_command(u,c):
 @authorized_only
 async def pnl_command(u,c):
     async with _lock: b=dict(BOT12_BALANCE_DATA)
-    await u.message.reply_text(f"PNL V8.8.26 FINAL ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
+    await u.message.reply_text(f"PNL V8.8.27 FINAL ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
 @authorized_only
 async def pnl12_command(u,c):
     async with _lock: b=dict(BOT12_BALANCE_DATA)
@@ -244,7 +251,7 @@ async def resetpnl_command(u,c):
     if cl: await save_bot12_balance(cl)
     await u.message.reply_text("PNL RESET")
 @authorized_only
-async def help_command(u,c): await u.message.reply_text("V8.8.26 FINAL | BOT1 300s | K200 Cache10m | BOT2 30s Strict+15m | 4.3GB/mo FIT")
+async def help_command(u,c): await u.message.reply_text("V8.8.27 FINAL | BOT1 300s | K200 Cache10m | BOT2 30s Strict+Dynamic 30/40/60m | 3.2GB/mo FIT")
 
 async def get_klines_bybit_async(client, symbol, interval='5', limit=200, include_current=False):
     url="https://api.bybit.com/v5/market/kline"; by=symbol if symbol.endswith('USDT') else f"{symbol}USDT"; params={'category':'linear','symbol':by,'interval':interval,'limit':limit}
@@ -348,7 +355,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
 
 async def bot1_scan(client):
     global BOT1_LAST_SCAN
-    print("Bot1 V8.8.26 FINAL 300s", flush=True)
+    print("Bot1 V8.8.27 FINAL 300s Dynamic 30/40/60", flush=True)
     while True:
         try:
             BOT1_LAST_SCAN=time.time()
@@ -366,8 +373,9 @@ async def bot1_scan(client):
                         if s not in WATCHLIST:
                             if s in cooldown_coins and time.time() < cooldown_coins[s]: continue
                             if s in cooldown_coins: del cooldown_coins[s]
-                            WATCHLIST[s]={'time':time.time(),'skip_until':time.time()+GRACE_AFTER_PUMP,'attempts':0,'last_state':'reset','trigger_low':None}; added+=1
-                            asyncio.create_task(send_telegram(client,f"PUMP {s} +{ch:.1f}% | Scan 15m later"))
+                            grace = get_grace_by_pump(ch)
+                            WATCHLIST[s]={'time':time.time(),'skip_until':time.time()+grace,'attempts':0,'last_state':'reset','trigger_low':None,'pump_pct':ch}; added+=1
+                            asyncio.create_task(send_telegram(client,f"PUMP {s} +{ch:.1f}% | Scan {grace//60}m later"))
             if added>0: await save_watchlist(client)
         except Exception as e: print(f"Bot1 {e}", flush=True)
         await asyncio.sleep(BOT1_SCAN_INTERVAL)
@@ -421,7 +429,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"proc {symbol} {e}", flush=True); return False
 
 async def bot2_scan(client):
-    print("Bot2 V8.8.26 FINAL 30s Strict+15m Grace", flush=True)
+    print("Bot2 V8.8.27 FINAL 30s Strict+Dynamic", flush=True)
     sem=asyncio.Semaphore(10)
     async def limited(s):
         async with sem: return await process_symbol(client,s)
@@ -444,7 +452,7 @@ async def bot2_scan(client):
         await asyncio.sleep(BOT2_SCAN_INTERVAL)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.8.26 FINAL 4.3GB/mo FIT","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v8.8.27 FINAL 3.2GB/mo Dynamic Grace FIT","watchlist":len(WATCHLIST)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -469,7 +477,7 @@ async def main_async():
     limits=httpx.Limits(max_keepalive_connections=20,max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
         await load_watchlist(client); await load_paper_trades(client); await load_bot12_balance(client)
-        print(f"Loaded V8.8.26 FINAL {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
+        print(f"Loaded V8.8.27 FINAL {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
         t_req=HTTPXRequest(connection_pool_size=20,connect_timeout=30.0,read_timeout=30.0,write_timeout=30.0)
         app_t=ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"]=client
@@ -489,7 +497,7 @@ async def main_async():
         port=int(os.environ.get("PORT",10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0',port=port,use_reloader=False),daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
-        print("v8.8.26 FINAL Operational 4.3GB/mo - BOT3 OFF + 15m Grace + Strict Active", flush=True)
+        print("v8.8.27 FINAL Operational 3.2GB/mo - Dynamic Grace 30/40/60m + Strict Active", flush=True)
         while True: await asyncio.sleep(3600)
 def main():
     loop=asyncio.get_event_loop()
