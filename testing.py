@@ -1,4 +1,4 @@
-# COINDEX V8.8.37 FINAL - CLEAN COMMANDS + DYNAMIC GRACE 60/120/180/240 + KLINE 400 + CACHE 60s - 3.8GB/mo
+# COINDEX V8.8.39 FINAL - PRICE<EMA MUST + ST/EMA CANCEL + low_live fix - 3.8GB/mo
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, logging, functools
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -30,12 +30,12 @@ MAX_OPEN_TRADES = 4
 
 def get_grace_by_pump(pump_pct):
     if pump_pct >= 100:
-        return 14400 # 240 min = 4 hours
+        return 14400
     if pump_pct >= 70:
-        return 10800 # 180 min = 3 hours
+        return 10800
     if pump_pct >= 50:
-        return 7200 # 120 min = 2 hours
-    return 3600 # 60 min = 1 hour (40-50%)
+        return 7200
+    return 3600
 
 TAKER_FEE = 0.0005; GST_RATE = 0.18; EFFECTIVE_FEE_RATE = TAKER_FEE*(1+GST_RATE)
 SLIPPAGE_PCT = 0.001; MAX_DISTANCE_PCT = 0.005
@@ -144,7 +144,7 @@ async def send_telegram(client, msg):
     except: pass
 
 @authorized_only
-async def start_command(u,c): await u.message.reply_text("V8.8.37 CLEAN + DYNAMIC GRACE 60/120/180/240 - KLINE 400")
+async def start_command(u,c): await u.message.reply_text("V8.8.39 FINAL - PRICE<EMA MUST + ST/EMA CANCEL - RLCUSDT ready")
 @authorized_only
 async def add_command(u,c):
     if c.args:
@@ -169,12 +169,12 @@ async def watchlist_command(u,c):
             skip = d.get('skip_until',0)
             grace=f" {int((skip-now)/60)}m" if skip>now else ""
             msg+=f"{s} #{d.get('attempts',0)+1} {d.get('last_state')}{grace}\n"
-    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.37:\n{msg}")
+    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.39:\n{msg}")
 @authorized_only
 async def health_command(u,c):
     async with _lock: b12=dict(BOT12_BALANCE_DATA); wl=len(WATCHLIST); open_c=len([k for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'])
     now=time.time(); b1_age=int(now-BOT1_LAST_SCAN) if BOT1_LAST_SCAN else 999; b2_age=int(now-BOT2_LAST_SCAN) if BOT2_LAST_SCAN else 999
-    await u.message.reply_text(f"HEALTH V8.8.37 DYNAMIC GRACE\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 60s\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
+    await u.message.reply_text(f"HEALTH V8.8.39 FINAL PRICE<EMA MUST\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 60s\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
 @authorized_only
 async def open_command(u,c):
     async with _lock: o={k:v for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'}
@@ -185,7 +185,7 @@ async def open_command(u,c):
 @authorized_only
 async def pnl_command(u,c):
     async with _lock: b=dict(BOT12_BALANCE_DATA)
-    await u.message.reply_text(f"PNL V8.8.37 ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
+    await u.message.reply_text(f"PNL V8.8.39 ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
 @authorized_only
 async def pnl12_command(u,c):
     async with _lock: b=dict(BOT12_BALANCE_DATA)
@@ -244,7 +244,7 @@ async def resetpnl_command(u,c):
 @authorized_only
 async def help_command(u,c):
     await u.message.reply_text(
-        "V8.8.37 CLEAN | 12 Commands:\n"
+        "V8.8.39 FINAL | 12 Commands:\n"
         "/start - Bot status\n"
         "/health - BOT1/2 health\n"
         "/watchlist - WL dekho\n"
@@ -257,7 +257,7 @@ async def help_command(u,c):
         "/add SYM - Coin add\n"
         "/remove SYM - Coin hatao\n"
         "/resetpnl bot12 confirm - Reset\n"
-        "DYNAMIC GRACE 60/120/180/240"
+        "RULE: Price<EMA must + ST<EMA cross"
     )
 
 async def get_klines_bybit_async(client, symbol, interval='5', limit=400, include_current=False):
@@ -364,7 +364,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
 
 async def bot1_scan(client):
     global BOT1_LAST_SCAN
-    print("Bot1 V8.8.37 CLEAN DYNAMIC GRACE", flush=True)
+    print("Bot1 V8.8.39 PRICE<EMA MUST", flush=True)
     while True:
         try:
             BOT1_LAST_SCAN=time.time()
@@ -437,12 +437,13 @@ async def process_symbol(client, symbol):
                         exec_price=(trig - (tick*TRIGGER_TICKS))*(1-SLIPPAGE_PCT)
                         if exec_price>0 and att!=0 and abs(live-exec_price)/exec_price > MAX_DISTANCE_PCT: should=False
                 if not should and time.time() - trig_time > 60:
-                    if close_closed > st_closed:
+                    # V8.8.39 FIX: cancel if close above ST OR EMA - tumhari rule
+                    if close_closed > st_closed or close_closed > ema_closed:
                         WATCHLIST[symbol]['trigger_low']=None; WATCHLIST[symbol]['trigger_bar_time']=0; WATCHLIST[symbol]['trigger_time']=0; WATCHLIST[symbol]['last_state']='reset'; changed=True
-                        asyncio.create_task(send_telegram(client,f"Cancel Trig {symbol} close above ST")); return changed
+                        asyncio.create_task(send_telegram(client,f"Cancel Trig {symbol} close above ST/EMA")); return changed
             if not should:
                 if trig is None:
-                    # V8.8.37: 3-CANDLE + CURRENT + PRICE_BELOW + UNIVERSAL DEBUG
+                    # V8.8.39 FINAL: PRICE<EMA MUST + ST<EMA cross
                     st_cross_found=False; cross_low=0; cross_bar_time=0
                     for i in range(1,4):
                         if len(df_closed) < i+1: continue
@@ -451,13 +452,13 @@ async def process_symbol(client, symbol):
                         if p_st >= p_ema and c_st < c_ema:
                             st_cross_found=True; cross_low=float(df_closed['low'].iloc[-i]); cross_bar_time=int(df_closed['timestamp'].iloc[-i]); break
                     current_below = st_closed < ema_closed
-                    price_below = (close_closed < st_closed) and (close_closed < ema_closed)
-                    # V8.8.37 UNIVERSAL DEBUG - har active coin pe
-                    print(f"[V8.8.37 DEBUG {symbol}] cross={st_cross_found} currBelow={current_below} priceBelow={price_below} ST={st_closed:.8f} EMA={ema_closed:.8f} CLOSE={close_closed:.8f} state={WATCHLIST[symbol].get('last_state')} attempt={WATCHLIST[symbol].get('attempts')} low_live={low_live:.8f} trig={WATCHLIST[symbol].get('trigger_low')}", flush=True)
+                    # V8.8.39 FIX: PRICE < EMA MUST - close and low both < EMA + ST < EMA
+                    price_below = (close_closed < ema_closed) and (low_live < ema_closed) and (st_closed < ema_closed)
+                    print(f"[V8.8.39 DEBUG {symbol}] cross={st_cross_found} currBelow={current_below} priceBelow={price_below} ST={st_closed:.8f} EMA={ema_closed:.8f} CLOSE={close_closed:.8f} LOW_LIVE={low_live:.8f} state={WATCHLIST[symbol].get('last_state')} attempt={WATCHLIST[symbol].get('attempts')} trig={WATCHLIST[symbol].get('trigger_low')}", flush=True)
                     if st_cross_found and current_below and price_below and cross_low>0:
                         if att in [1,2]:
                             if not WATCHLIST[symbol].get('bullish_confirmed',False): return False
-                            if bearish_time and cross_bar_time <= bearish_time: return False
+                            if bearish_time and cross_bar_time < bearish_time: return False
                         WATCHLIST[symbol]['trigger_low']=cross_low; WATCHLIST[symbol]['last_state']=f'waiting_break_{att+1}'; WATCHLIST[symbol]['trigger_time']=time.time(); WATCHLIST[symbol]['trigger_bar_time']=cross_bar_time; changed=True
                         asyncio.create_task(send_telegram(client,f"{att+1}st Trig {symbol} Low ${cross_low:.8f}"))
             if should and att<3 and active<MAX_OPEN_TRADES and exec_price>0:
@@ -472,7 +473,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"proc {symbol} {e}", flush=True); return False
 
 async def bot2_scan(client):
-    print("Bot2 V8.8.37 CLEAN DYNAMIC GRACE", flush=True)
+    print("Bot2 V8.8.39 PRICE<EMA MUST Operational", flush=True)
     sem=asyncio.Semaphore(10)
     async def limited(s):
         async with sem: return await process_symbol(client,s)
@@ -495,7 +496,7 @@ async def bot2_scan(client):
         await asyncio.sleep(BOT2_SCAN_INTERVAL)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.8.37 CLEAN DYNAMIC GRACE 60/120/180/240 - KLINE 400","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v8.8.39 FINAL - PRICE<EMA MUST + ST/EMA CANCEL","watchlist":len(WATCHLIST)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -520,12 +521,11 @@ async def main_async():
     limits=httpx.Limits(max_keepalive_connections=20,max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
         await load_watchlist(client); await load_paper_trades(client); await load_bot12_balance(client)
-        print(f"Loaded V8.8.37 CLEAN DYNAMIC GRACE {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
+        print(f"Loaded V8.8.39 FINAL PRICE<EMA MUST {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
         t_req=HTTPXRequest(connection_pool_size=20,connect_timeout=30.0,read_timeout=30.0,write_timeout=30.0)
         app_t=ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"]=client
         application=app_t
-        # CLEAN COMMAND LIST - 12 commands only, BOT3 removed
         for cmd,fn in [("start",start_command),("add",add_command),("remove",remove_command),("watchlist",watchlist_command),("open",open_command),("close",close_command),("pnl",pnl_command),("pnl12",pnl12_command),("exit",exit_command),("exitall",exitall_command),("resetpnl",resetpnl_command),("reset",resetpnl_command),("help",help_command),("health",health_command)]:
             app_t.add_handler(CommandHandler(cmd,fn))
         await app_t.initialize(); await app_t.start()
@@ -541,7 +541,7 @@ async def main_async():
         port=int(os.environ.get("PORT",10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0',port=port,use_reloader=False),daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
-        print("v8.8.37 CLEAN DYNAMIC GRACE Operational", flush=True)
+        print("v8.8.39 FINAL PRICE<EMA MUST Operational", flush=True)
         while True: await asyncio.sleep(3600)
 def main():
     loop=asyncio.get_event_loop()
