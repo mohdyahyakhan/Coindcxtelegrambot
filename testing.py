@@ -1,4 +1,4 @@
-# COINDEX V8.8.45 FINAL - PURE REMOVE + 15-CANDLE AUDIT + WICK FILTER + LOOP FIX + 4.4GB SAFE
+# COINDEX V8.8.47 FINAL - PHASE1 v4.1 - V8.8.45 + PRINT-ONLY SHADOW AUDIT - AND FIX
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, logging, functools
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -31,12 +31,13 @@ MAX_OPEN_TRADES = 4
 WICK_BODY_MIN_RATIO = 0.5
 WICK_MAX_RATIO = 2.0
 WICK_RANGE_MAX_ATR = 3.0
-
-# === V8.8.45 NEW - PURE REMOVE CONFIG ===
 WICK_LOOKBACK = 15
 WICK_BAD_PERCENT = 60
-WICK_CHECK_INTERVAL = 300 # 5 min
+WICK_CHECK_INTERVAL = 300
 WICK_COOLDOWN_HOURS = 4
+
+# === V8.8.47 PHASE1 TOP ===
+AUDIT_LAST_KEPT = {}
 
 def get_grace_by_pump(pump_pct):
     if pump_pct >= 100: return 14400
@@ -91,7 +92,6 @@ def is_bad_candle(o, h, l, c, atr, body_min_ratio=0.5, wick_max_ratio=2.0, range
     if atr > 0 and total_range > atr * range_max_atr: return True
     return False
 
-# === V8.8.45 NEW FUNCTION - 15 CANDLE CHOPPY CHECK ===
 def is_choppy_market_15(df, lookback=15, body_min_ratio=0.35, wick_max_ratio=1.8, bad_percent=60):
     if df is None or len(df) < lookback:
         return False, 0, 0
@@ -108,6 +108,90 @@ def is_choppy_market_15(df, lookback=15, body_min_ratio=0.35, wick_max_ratio=1.8
     percent = (bad_count / lookback * 100) if lookback>0 else 0
     is_choppy = percent >= bad_percent
     return is_choppy, bad_count, percent
+
+# === CLAUDE ORIGINAL V2 - AND FIX - FINAL ===
+def choppy_filter(df_closed, lookback=15, body_thr=2, wicky_thr=0.50, avg_body_thr=0.40, flip_thr=0.65, er_thr=0.20):
+    try:
+        if df_closed is None or len(df_closed) < lookback:
+            return True, {"fails":0,"wicky_ratio":0,"avg_body":0,"flip_rate":0,"er":0,"reason":"short df"}
+        recent = df_closed.tail(lookback)
+        wicky=0; bodies=[]; dirs=[]
+        for _, r in recent.iterrows():
+            try:
+                o=float(r['open']); h=float(r['high']); l=float(r['low']); c=float(r['close'])
+                rng = h - l if h>l else 1e-9
+                body = abs(c-o)
+                body_ratio = body/rng if rng>0 else 0
+                bodies.append(body_ratio)
+                upper = h - max(o,c); lower = min(o,c) - l
+                total_wick = upper + lower
+                if body_ratio < 0.30 and body>0 and total_wick > body*2.5:
+                    wicky+=1
+                if c>o: dirs.append(1)
+                elif c<o: dirs.append(-1)
+                else: dirs.append(0)
+            except: continue
+        wicky_ratio = wicky/lookback if lookback else 0
+        avg_body = float(np.mean(bodies)) if bodies else 0
+        flips=0; last=None
+        for d in dirs:
+            if d==0: continue
+            if last is not None and d!=last: flips+=1
+            last=d
+        flip_rate = flips/(lookback-1) if lookback>1 else 0
+        try:
+            closes = recent['close'].values
+            net = abs(closes[-1]-closes[0]); tot = np.sum(np.abs(np.diff(closes))) + 1e-9
+            er = net/tot
+        except: er=0
+        fails=0
+        if wicky_ratio>wicky_thr: fails+=1
+        if avg_body<avg_body_thr: fails+=1
+        if flip_rate>flip_thr: fails+=1
+        if er<er_thr: fails+=1
+        return fails<body_thr, {"fails":fails,"wicky_ratio":wicky_ratio,"avg_body":avg_body,"flip_rate":flip_rate,"er":er}
+    except Exception as ex:
+        return True, {"fails":0,"wicky_ratio":0,"avg_body":0,"flip_rate":0,"er":0,"reason":f"crash {ex}"}
+
+# === ISOLATED SHADOW LOG - NO COLLISION ===
+def shadow_log(symbol, df_closed, bad_c, v45_remove):
+    try:
+        try:
+            tradable, m_dict = choppy_filter(df_closed, 15, 2, 0.50, 0.40, 0.65, 0.20)
+            if isinstance(m_dict, dict) and "reason" in m_dict and m_dict.get("fails",0)==0:
+                s_fails=0; s_w=s_b=s_f=s_er=0; s_reason=m_dict.get('reason','')
+            else:
+                s_fails = m_dict.get('fails',0) if isinstance(m_dict,dict) else 0
+                s_w = m_dict.get('wicky_ratio',0) if isinstance(m_dict,dict) else 0
+                s_b = m_dict.get('avg_body',0) if isinstance(m_dict,dict) else 0
+                s_f = m_dict.get('flip_rate',0) if isinstance(m_dict,dict) else 0
+                s_er = m_dict.get('er',0) if isinstance(m_dict,dict) else 0
+                s_reason = m_dict.get('reason','') if isinstance(m_dict,dict) else ''
+        except Exception as ex:
+            s_fails=s_w=s_b=s_f=s_er=0; s_reason=f"crash {ex}"
+        try:
+            raw_ts = df_closed.iloc[-1].get('timestamp', 'NA')
+            if hasattr(raw_ts, 'timestamp'): s_ts = int(raw_ts.timestamp())
+            elif isinstance(raw_ts, (int,float)): s_ts = int(raw_ts/1000) if raw_ts>1e12 else int(raw_ts)
+            else: s_ts = raw_ts
+        except: s_ts = "NA"
+        s_now = time.time()
+        s_should = False
+        if v45_remove: s_should=True
+        else:
+            s_last = AUDIT_LAST_KEPT.get(symbol,0)
+            if s_now - s_last > 3600:
+                AUDIT_LAST_KEPT[symbol]=s_now
+                s_should=True
+        if s_should:
+            print(f"[AUDIT {'REMOVED' if v45_remove else 'KEPT'} {symbol}] t={s_ts} V45 {bad_c}/15 V46 fails={s_fails} w={s_w:.3f} b={s_b:.3f} f={s_f:.3f} er={s_er:.3f} reason={s_reason}", flush=True)
+            try:
+                s_cs = df_closed.tail(15)[["open","high","low","close"]].round(10).values.tolist()
+                print(f"[CANDLES {symbol}] t={s_ts} {s_cs}", flush=True)
+            except Exception as ce:
+                print(f"[CANDLES ERR {symbol}] {ce}", flush=True)
+    except Exception as ex2:
+        print(f"[SHADOW ERR {symbol}] {ex2}", flush=True)
 
 async def gist_get(client, filename):
     if not GIST_URL or not GITHUB_TOKEN: return {}
@@ -185,7 +269,7 @@ async def send_telegram(client, msg):
     except: pass
 
 @authorized_only
-async def start_command(u,c): await u.message.reply_text("V8.8.45 FINAL - PURE REMOVE 15C + WICK FILTER + LOOP FIX")
+async def start_command(u,c): await u.message.reply_text("V8.8.47 FINAL - PHASE1 PRINT-ONLY v4.1")
 @authorized_only
 async def add_command(u,c):
     if c.args:
@@ -210,12 +294,12 @@ async def watchlist_command(u,c):
             skip = d.get('skip_until',0)
             grace=f" {int((skip-now)/60)}m" if skip>now else ""
             msg+=f"{s} #{d.get('attempts',0)+1} {d.get('last_state')}{grace}\n"
-    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.45:\n{msg}")
+    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.47:\n{msg}")
 @authorized_only
 async def health_command(u,c):
     async with _lock: b12=dict(BOT12_BALANCE_DATA); wl=len(WATCHLIST); open_c=len([k for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'])
     now=time.time(); b1_age=int(now-BOT1_LAST_SCAN) if BOT1_LAST_SCAN else 999; b2_age=int(now-BOT2_LAST_SCAN) if BOT2_LAST_SCAN else 999
-    await u.message.reply_text(f"HEALTH V8.8.45 PURE REMOVE 15C\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 20s\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
+    await u.message.reply_text(f"HEALTH V8.8.47 PHASE1 v4.1\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 20s\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
 @authorized_only
 async def open_command(u,c):
     async with _lock: o={k:v for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'}
@@ -226,7 +310,7 @@ async def open_command(u,c):
 @authorized_only
 async def pnl_command(u,c):
     async with _lock: b=dict(BOT12_BALANCE_DATA)
-    await u.message.reply_text(f"PNL V8.8.45 ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
+    await u.message.reply_text(f"PNL V8.8.47 ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
 @authorized_only
 async def pnl12_command(u,c):
     async with _lock: b=dict(BOT12_BALANCE_DATA)
@@ -284,7 +368,7 @@ async def resetpnl_command(u,c):
     await u.message.reply_text("PNL RESET")
 @authorized_only
 async def help_command(u,c):
-    await u.message.reply_text("V8.8.45 | PURE REMOVE 15C + WICK FILTER | 12 Commands\n/start\n/health\n/watchlist\n/open\n/pnl\n/pnl12\n/close\n/exit\n/exitall\n/add\n/remove\n/resetpnl\n15C: 9/15 wicky -> WL Remove + 4h CD")
+    await u.message.reply_text("V8.8.47 Phase1 v4.1 PRINT-ONLY\n/start\n/health\n/watchlist\n/open\n/pnl\n/pnl12\n/close\n/exit\n/exitall\n/add\n/remove\n/resetpnl\nLogs: [AUDIT] + [CANDLES]")
 
 async def get_klines_bybit_async(client, symbol, interval='5', limit=400, include_current=False):
     url="https://api.bybit.com/v5/market/kline"; by=symbol if symbol.endswith('USDT') else f"{symbol}USDT"; params={'category':'linear','symbol':by,'interval':interval,'limit':limit}
@@ -395,7 +479,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
 
 async def bot1_scan(client):
     global BOT1_LAST_SCAN
-    print("Bot1 V8.8.45 PURE REMOVE", flush=True)
+    print("Bot1 V8.8.47 PHASE1 v4.1 Operational", flush=True)
     while True:
         try:
             BOT1_LAST_SCAN=time.time()
@@ -442,7 +526,6 @@ async def process_symbol(client, symbol):
             if symbol not in WATCHLIST: return False
             if WATCHLIST[symbol].get('skip_until',0) > time.time(): return False
             if PAPER_TRADES.get(symbol,{}).get('status')=='OPEN': return False
-            # === V8.8.45 PURE REMOVE - 5 MIN 15-CANDLE AUDIT ===
             now_check = time.time()
             last_wick = WATCHLIST[symbol].get('last_wick_check',0)
             if now_check - last_wick > WICK_CHECK_INTERVAL:
@@ -456,7 +539,12 @@ async def process_symbol(client, symbol):
                     asyncio.create_task(send_telegram(client,f"🧹 Wick Remove {symbol} — {bad_c}/{WICK_LOOKBACK} ({pct:.0f}%) wicky — WL se hatao"))
                     print(f"[WICK REMOVE {symbol}] {bad_c}/{WICK_LOOKBACK} {pct:.0f}% wicky -> REMOVED + {WICK_COOLDOWN_HOURS}h CD", flush=True)
                     changed=True
+                    try: shadow_log(symbol, df_closed, bad_c, True)
+                    except: pass
                     return changed
+                else:
+                    try: shadow_log(symbol, df_closed, bad_c, False)
+                    except: pass
             att=WATCHLIST[symbol].get('attempts',0); state=WATCHLIST[symbol].get('last_state','reset'); active=sum(1 for t in PAPER_TRADES.values() if t.get('status')=='OPEN')
             if att in [1, 2]:
                 if state=='waiting_st_bullish':
@@ -515,7 +603,7 @@ async def process_symbol(client, symbol):
                                 WATCHLIST[symbol]['bearish_bar_time']=curr_bar_ts; WATCHLIST[symbol]['last_cancel_bar']=curr_bar_ts; st_cross_found=False
                         except: pass
                     if st_cross_found:
-                        print(f"[V8.8.45 DEBUG {symbol}] cross={st_cross_found} currBelow={current_below} priceBelow={price_below} ST={st_closed:.8f} EMA={ema_closed:.8f}", flush=True)
+                        print(f"[V8.8.47 DEBUG {symbol}] cross={st_cross_found} currBelow={current_below} priceBelow={price_below} ST={st_closed:.8f} EMA={ema_closed:.8f}", flush=True)
                     if st_cross_found and current_below and price_below and cross_low>0:
                         if att in [1, 2]:
                             if not WATCHLIST[symbol].get('bullish_confirmed',False): return False
@@ -534,7 +622,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"proc {symbol} {e}", flush=True); return False
 
 async def bot2_scan(client):
-    print("Bot2 V8.8.45 PURE REMOVE Operational", flush=True)
+    print("Bot2 V8.8.47 PHASE1 v4.1 Operational", flush=True)
     sem=asyncio.Semaphore(10)
     async def limited(s):
         async with sem: return await process_symbol(client,s)
@@ -557,7 +645,7 @@ async def bot2_scan(client):
         await asyncio.sleep(BOT2_SCAN_INTERVAL)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.8.45 FINAL - PURE REMOVE 15C - 4.4GB","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v8.8.47 PHASE1 v4.1 - AND FIX - 4.4GB","watchlist":len(WATCHLIST)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -582,7 +670,7 @@ async def main_async():
     limits=httpx.Limits(max_keepalive_connections=20,max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
         await load_watchlist(client); await load_paper_trades(client); await load_bot12_balance(client)
-        print(f"Loaded V8.8.45 PURE REMOVE {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
+        print(f"Loaded V8.8.47 PHASE1 v4.1 {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
         t_req=HTTPXRequest(connection_pool_size=20,connect_timeout=30.0,read_timeout=30.0,write_timeout=30.0)
         app_t=ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"]=client
@@ -602,7 +690,7 @@ async def main_async():
         port=int(os.environ.get("PORT",10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0',port=port,use_reloader=False),daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
-        print("v8.8.45 PURE REMOVE Operational", flush=True)
+        print("v8.8.47 PHASE1 v4.1 Operational", flush=True)
         while True: await asyncio.sleep(3600)
 def main():
     loop=asyncio.get_event_loop()
