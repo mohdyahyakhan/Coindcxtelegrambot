@@ -1,4 +1,4 @@
-# COINDEX V8.8.51 FINAL - CHANGE_24H + PRICE DOWN + PEAK_TIME TRACK - WICK REMOVE
+# COINDEX V8.8.52 FINAL - CHANGE_24H + PRICE DOWN + PEAK_TIME TRACK - WICK REMOVE - UPDATED MENU
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, logging, functools
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -27,12 +27,11 @@ LIVE_PRICE_CACHE_TTL = 15
 BOT12_STARTING_BALANCE = 10000.0
 MAX_OPEN_TRADES = 4
 
-# === V8.8.51 - FINAL LOGIC ===
 def get_grace_by_pump(pump_pct):
-    if pump_pct >= 100: return 14400 # 240m
-    if pump_pct >= 70: return 10800 # 180m
-    if pump_pct >= 50: return 7200 # 120m
-    return 3600 # 60m for 40-50%
+    if pump_pct >= 100: return 14400
+    if pump_pct >= 70: return 10800
+    if pump_pct >= 50: return 7200
+    return 3600
 
 TAKER_FEE = 0.0005; GST_RATE = 0.18; EFFECTIVE_FEE_RATE = TAKER_FEE*(1+GST_RATE)
 SLIPPAGE_PCT = 0.001; MAX_DISTANCE_PCT = 0.005
@@ -123,7 +122,6 @@ async def load_watchlist(c):
                     WATCHLIST[cs].setdefault('bearish_bar_time',0)
                     WATCHLIST[cs].setdefault('last_cancel_bar',0)
                     WATCHLIST[cs].setdefault('st_cross_time',0)
-                    # V8.8.51 new fields
                     WATCHLIST[cs].setdefault('wl_add_price',0)
                     WATCHLIST[cs].setdefault('wl_add_change',d.get('pump_pct',0))
                     WATCHLIST[cs].setdefault('max_change',d.get('pump_pct',d.get('peak_pct',0)))
@@ -158,7 +156,7 @@ async def send_telegram(client, msg):
     except: pass
 
 @authorized_only
-async def start_command(u,c): await u.message.reply_text("V8.8.51 FINAL - CHANGE+PRICE - PEAK_TIME TRACK")
+async def start_command(u,c): await u.message.reply_text("V8.8.52 FINAL - CHANGE+PRICE - PEAK_TIME TRACK\nBot Active ✅")
 @authorized_only
 async def add_command(u,c):
     if c.args:
@@ -168,7 +166,7 @@ async def add_command(u,c):
             WATCHLIST[s]={'time':now,'skip_until':0,'attempts':0,'last_state':'reset','trigger_low':None,'pump_pct':40,'trigger_bar_time':0,'trigger_time':0,'bullish_confirmed':False,'bearish_bar_time':0,'last_cancel_bar':0,'st_cross_time':0,'wl_add_price':0,'wl_add_change':40,'max_change':40,'max_change_time':now,'peak_pct':40,'peak_price':0,'peak_time':now,'last_30m_avg_price':0,'last_30min_price':0,'last_check':now,'down_count':0,'peak_confirmed':False,'grace_start':0,'grace_end':0}
         cl=c.bot_data.get("http_client")
         if cl: await save_watchlist(cl)
-        await u.message.reply_text(f"{s} added V8.8.51")
+        await u.message.reply_text(f"{s} added V8.8.52")
 @authorized_only
 async def remove_command(u,c):
     if c.args:
@@ -177,6 +175,17 @@ async def remove_command(u,c):
         cl=c.bot_data.get("http_client")
         if cl: await save_watchlist(cl)
         await u.message.reply_text(f"{s} removed")
+@authorized_only
+async def removeall_command(u,c):
+    async with _lock:
+        count = len(WATCHLIST)
+        WATCHLIST.clear()
+        cooldown_coins.clear()
+        KLINE_CACHE.clear()
+        LIVE_PRICE_CACHE.clear()
+    cl=c.bot_data.get("http_client")
+    if cl: await save_watchlist(cl)
+    await u.message.reply_text(f"All {count} coins removed - WL cleared ✅\nUse /health to check")
 @authorized_only
 async def watchlist_command(u,c):
     msg=""; now=time.time()
@@ -188,12 +197,13 @@ async def watchlist_command(u,c):
                 skip = d.get('skip_until',0)
                 grace=f" {int((skip-now)/60)}m grace max={d.get('max_change',0):.1f}%" if skip>now else f" READY max={d.get('max_change',0):.1f}%"
             msg+=f"{s} #{d.get('attempts',0)+1} {d.get('last_state')}{grace}\n"
-    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.51:\n{msg}")
+    if not msg: msg="Empty"
+    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.52:\n{msg}")
 @authorized_only
 async def health_command(u,c):
     async with _lock: b12=dict(BOT12_BALANCE_DATA); wl=len(WATCHLIST); open_c=len([k for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'])
     now=time.time(); b1_age=int(now-BOT1_LAST_SCAN) if BOT1_LAST_SCAN else 999; b2_age=int(now-BOT2_LAST_SCAN) if BOT2_LAST_SCAN else 999
-    await u.message.reply_text(f"HEALTH V8.8.51 FINAL\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 20s\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
+    await u.message.reply_text(f"HEALTH V8.8.52 FINAL\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 20s\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
 @authorized_only
 async def open_command(u,c):
     async with _lock: o={k:v for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'}
@@ -204,11 +214,7 @@ async def open_command(u,c):
 @authorized_only
 async def pnl_command(u,c):
     async with _lock: b=dict(BOT12_BALANCE_DATA)
-    await u.message.reply_text(f"PNL V8.8.51 ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
-@authorized_only
-async def pnl12_command(u,c):
-    async with _lock: b=dict(BOT12_BALANCE_DATA)
-    await u.message.reply_text(f"BOT12 ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
+    await u.message.reply_text(f"PNL V8.8.52 ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
 @authorized_only
 async def close_command(u,c):
     if not c.args: return await u.message.reply_text("Use /close SYM")
@@ -262,7 +268,22 @@ async def resetpnl_command(u,c):
     await u.message.reply_text("PNL RESET")
 @authorized_only
 async def help_command(u,c):
-    await u.message.reply_text("V8.8.51 FINAL - CHANGE+PRICE - PEAK_TIME\n40-70% PeakWait: 6-candle avg + 1-down\n70%+ Direct Grace + auto extend\n4h timeout\n/start /health /watchlist /open /pnl /close /exit /add /remove")
+    await u.message.reply_text(
+        "V8.8.52 FINAL\n"
+        "start - Bot status & version\n"
+        "health - Bot1/2 health check\n"
+        "watchlist - Watchlist dekho\n"
+        "open - Active crypto trades\n"
+        "pnl - PnL\n"
+        "close - Crypto trade band karo\n"
+        "exit - Trade exit karo\n"
+        "exitall - Saare crypto trades exit\n"
+        "add - Coin add karo\n"
+        "remove - Coin hatao\n"
+        "removeall - All Coins hatao\n"
+        "resetpnl - PnL reset karo\n"
+        "help - Help menu"
+    )
 
 async def get_klines_bybit_async(client, symbol, interval='5', limit=400, include_current=False):
     url="https://api.bybit.com/v5/market/kline"; by=symbol if symbol.endswith('USDT') else f"{symbol}USDT"; params={'category':'linear','symbol':by,'interval':interval,'limit':limit}
@@ -374,7 +395,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
 
 async def bot1_scan(client):
     global BOT1_LAST_SCAN
-    print("Bot1 V8.8.51 FINAL Operational", flush=True)
+    print("Bot1 V8.8.52 FINAL Operational", flush=True)
     while True:
         try:
             BOT1_LAST_SCAN=time.time()
@@ -393,12 +414,11 @@ async def bot1_scan(client):
                             if s in cooldown_coins and time.time() < cooldown_coins[s]: continue
                             if s in cooldown_coins: del cooldown_coins[s]
                             now=time.time()
-                            # Fetch initial 6-candle avg later, for now use last_price
                             init_avg = last_price
                             if ch >= 70:
                                 grace = get_grace_by_pump(ch)
                                 WATCHLIST[s]={'time':now,'skip_until':now+grace,'attempts':0,'last_state':'reset','trigger_low':None,'pump_pct':ch,'trigger_bar_time':0,'trigger_time':0,'bullish_confirmed':False,'bearish_bar_time':0,'last_cancel_bar':0,'st_cross_time':0,'wl_add_price':last_price,'wl_add_change':ch,'max_change':ch,'max_change_time':now,'peak_pct':ch,'peak_price':last_price,'peak_time':now,'last_30m_avg_price':init_avg,'last_30min_price':last_price,'last_check':now,'down_count':0,'peak_confirmed':True,'grace_start':now,'grace_end':now+grace}
-                                asyncio.create_task(send_telegram(client,f"🚀 PUMP {s} +{ch:.1f}% | 70%+ Direct Grace {grace//60}m peak_time={time.strftime('%H:%M', time.localtime(now))}"))
+                                asyncio.create_task(send_telegram(client,f"🚀 PUMP {s} +{ch:.1f}% | 70%+ Direct Grace {grace//60}m"))
                             else:
                                 WATCHLIST[s]={'time':now,'skip_until':0,'attempts':0,'last_state':'reset','trigger_low':None,'pump_pct':ch,'trigger_bar_time':0,'trigger_time':0,'bullish_confirmed':False,'bearish_bar_time':0,'last_cancel_bar':0,'st_cross_time':0,'wl_add_price':last_price,'wl_add_change':ch,'max_change':ch,'max_change_time':now,'peak_pct':ch,'peak_price':last_price,'peak_time':now,'last_30m_avg_price':init_avg,'last_30min_price':last_price,'last_check':now,'down_count':0,'peak_confirmed':False,'grace_start':0,'grace_end':0}
                                 asyncio.create_task(send_telegram(client,f"👀 PUMP {s} +{ch:.1f}% | 40-70% Peak-Wait Start"))
@@ -409,30 +429,21 @@ async def bot1_scan(client):
 
 async def process_symbol(client, symbol):
     try:
-        # === FETCH KLINES FIRST FOR 6-CANDLE AVG ===
         df_live_raw=await get_klines_cached(client, symbol)
         if df_live_raw is None or len(df_live_raw) < 10: return False
         df_closed_raw=df_live_raw.iloc[:-1].reset_index(drop=True)
-
-        # === V8.8.51 PEAK WAIT LOGIC ===
-        # Get 6-candle avg + current change
         current_avg = float(df_closed_raw.tail(6)['close'].mean()) if len(df_closed_raw)>=6 else float(df_closed_raw['close'].iloc[-1])
         live_price, current_change = await get_live_price_cached(client, symbol)
         if live_price is None: live_price = current_avg
         if current_change is None: current_change = 0
-
         async with _lock:
             if symbol not in WATCHLIST: return False
             wl = WATCHLIST.get(symbol,{})
             now=time.time()
-
-            # If WL added first time, set initial avg correctly
             if wl.get('last_30m_avg_price',0)==0:
                 WATCHLIST[symbol]['last_30m_avg_price']=current_avg
                 WATCHLIST[symbol]['last_check']=now
                 return False
-
-            # 4h force timeout
             if not wl.get('peak_confirmed',True) and (now - wl.get('time',now) > 240*60):
                 grace = get_grace_by_pump(wl.get('max_change',40))
                 WATCHLIST[symbol]['peak_confirmed']=True
@@ -442,10 +453,7 @@ async def process_symbol(client, symbol):
                 print(f"[PEAK TIMEOUT] {symbol} forced max={wl.get('max_change',0):.1f}%", flush=True)
                 asyncio.create_task(send_telegram(client,f"⏰ Peak Timeout {symbol} max={wl.get('max_change',0):.1f}% grace {grace//60}m"))
                 return True
-
-            # 30 min check filter
             if now - wl.get('last_check',0) < 30*60:
-                # Still allow 70%+ auto extend even before 30m if change spikes
                 if wl.get('peak_confirmed',True) and current_change > wl.get('max_change',0):
                     if current_change >= 70:
                         WATCHLIST[symbol]['max_change']=current_change
@@ -456,16 +464,11 @@ async def process_symbol(client, symbol):
                         WATCHLIST[symbol]['skip_until']=now+grace
                         print(f"[70%+ EXTEND] {symbol} {current_change:.1f}% grace {grace//60}m", flush=True)
                 return False
-
-            # Max change update ALWAYS
             if current_change > wl.get('max_change',0):
                 WATCHLIST[symbol]['max_change']=current_change
                 WATCHLIST[symbol]['max_change_time']=now
                 wl = WATCHLIST[symbol]
-
-            # 70%+ case
             if wl.get('peak_confirmed',False) and current_change >= 70:
-                # auto extend
                 grace = get_grace_by_pump(WATCHLIST[symbol]['max_change'])
                 WATCHLIST[symbol]['grace_start']=WATCHLIST[symbol]['max_change_time']
                 WATCHLIST[symbol]['grace_end']=WATCHLIST[symbol]['max_change_time']+grace
@@ -473,12 +476,9 @@ async def process_symbol(client, symbol):
                 WATCHLIST[symbol]['last_30m_avg_price']=current_avg
                 WATCHLIST[symbol]['last_check']=now
                 return True
-
             if not wl.get('peak_confirmed',True):
-                # 40-70% DOWN check via PRICE avg
                 last_avg = wl.get('last_30m_avg_price',current_avg)
                 if current_avg < last_avg:
-                    # 1-down confirm
                     WATCHLIST[symbol]['down_count']=wl.get('down_count',0)+1
                     if WATCHLIST[symbol]['down_count'] >= 1:
                         peak_pct = WATCHLIST[symbol]['max_change']
@@ -490,7 +490,7 @@ async def process_symbol(client, symbol):
                         WATCHLIST[symbol]['skip_until']=peak_t+grace
                         WATCHLIST[symbol]['last_30m_avg_price']=current_avg
                         WATCHLIST[symbol]['last_check']=now
-                        print(f"[PEAK CONFIRM] {symbol} avg DOWN {last_avg:.6f} -> {current_avg:.6f} max={peak_pct:.1f}% peak_time={peak_t} grace={grace//60}m", flush=True)
+                        print(f"[PEAK CONFIRM] {symbol} avg DOWN {last_avg:.6f} -> {current_avg:.6f} max={peak_pct:.1f}%", flush=True)
                         asyncio.create_task(send_telegram(client,f"✅ Peak Confirm {symbol} max={peak_pct:.1f}% | Price DOWN {last_avg:.4f}->{current_avg:.4f} | Grace {grace//60}m"))
                         return True
                 else:
@@ -498,8 +498,6 @@ async def process_symbol(client, symbol):
                 WATCHLIST[symbol]['last_30m_avg_price']=current_avg
                 WATCHLIST[symbol]['last_check']=now
                 return False
-
-        # === NORMAL TRADING AFTER GRACE ===
         df_live=await asyncio.to_thread(calculate_supertrend, df_live_raw)
         df_closed=await asyncio.to_thread(calculate_supertrend, df_closed_raw)
         await check_paper_trades(client, df_live, df_closed, symbol)
@@ -559,8 +557,6 @@ async def process_symbol(client, symbol):
                         st_cross_found=False
                     if cross_bar_time>0 and cross_bar_time == WATCHLIST[symbol].get('st_cross_time',0):
                         st_cross_found=False
-                    if st_cross_found:
-                        print(f"[V8.8.51 DEBUG {symbol}] cross={st_cross_found} currBelow={current_below} priceBelow={price_below} ST={st_closed:.8f} EMA={ema_closed:.8f}", flush=True)
                     if st_cross_found and current_below and price_below and cross_low>0:
                         if att in [1, 2]:
                             if not WATCHLIST[symbol].get('bullish_confirmed',False): return False
@@ -579,7 +575,7 @@ async def process_symbol(client, symbol):
     except Exception as e: print(f"proc {symbol} {e}", flush=True); return False
 
 async def bot2_scan(client):
-    print("Bot2 V8.8.51 FINAL Operational", flush=True)
+    print("Bot2 V8.8.52 FINAL Operational", flush=True)
     sem=asyncio.Semaphore(10)
     async def limited(s):
         async with sem: return await process_symbol(client,s)
@@ -591,9 +587,7 @@ async def bot2_scan(client):
                     if d.get('trigger_low') is not None: active_syms.append(s)
                     elif not d.get('peak_confirmed', True): active_syms.append(s)
                     elif d.get('skip_until',0) > time.time():
-                        # Keep checking for 70%+ extend
-                        if d.get('peak_confirmed',True):
-                            active_syms.append(s)
+                        if d.get('peak_confirmed',True): active_syms.append(s)
                         continue
                     elif PAPER_TRADES.get(s,{}).get('status')=='OPEN': active_syms.append(s)
                     elif d.get('last_state') in ['waiting_st_bullish','waiting_st_bearish']: active_syms.append(s)
@@ -606,7 +600,7 @@ async def bot2_scan(client):
         await asyncio.sleep(BOT2_SCAN_INTERVAL)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.8.51 FINAL - PEAK_TIME TRACK","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v8.8.52 FINAL - UPDATED MENU","watchlist":len(WATCHLIST)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -631,12 +625,12 @@ async def main_async():
     limits=httpx.Limits(max_keepalive_connections=20,max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
         await load_watchlist(client); await load_paper_trades(client); await load_bot12_balance(client)
-        print(f"Loaded V8.8.51 FINAL {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
+        print(f"Loaded V8.8.52 FINAL {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
         t_req=HTTPXRequest(connection_pool_size=20,connect_timeout=30.0,read_timeout=30.0,write_timeout=30.0)
         app_t=ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"]=client
         application=app_t
-        for cmd,fn in [("start",start_command),("add",add_command),("remove",remove_command),("watchlist",watchlist_command),("open",open_command),("close",close_command),("pnl",pnl_command),("pnl12",pnl12_command),("exit",exit_command),("exitall",exitall_command),("resetpnl",resetpnl_command),("reset",resetpnl_command),("help",help_command),("health",health_command)]:
+        for cmd,fn in [("start",start_command),("add",add_command),("remove",remove_command),("removeall",removeall_command),("watchlist",watchlist_command),("open",open_command),("close",close_command),("pnl",pnl_command),("exit",exit_command),("exitall",exitall_command),("resetpnl",resetpnl_command),("reset",resetpnl_command),("help",help_command),("health",health_command)]:
             app_t.add_handler(CommandHandler(cmd,fn))
         await app_t.initialize(); await app_t.start()
         asyncio.create_task(process_webhook_queue())
@@ -651,7 +645,7 @@ async def main_async():
         port=int(os.environ.get("PORT",10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0',port=port,use_reloader=False),daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
-        print("v8.8.51 FINAL Operational", flush=True)
+        print("v8.8.52 FINAL Operational - UPDATED MENU", flush=True)
         while True: await asyncio.sleep(3600)
 def main():
     loop=asyncio.get_event_loop()
