@@ -1,4 +1,4 @@
-# COINDEX V8.8.62 FINAL FIXED - STRONG BREAKDOWN FIX
+# COINDEX V8.8.63 GAP-FREE #1 - 1st Entry No Retest Wait
 import threading, asyncio, httpx, time, os, json, pandas as pd, numpy as np, logging, functools
 from decimal import Decimal, ROUND_DOWN
 from flask import Flask, jsonify, request
@@ -166,7 +166,7 @@ async def send_telegram(client, msg):
     except: pass
 
 @authorized_only
-async def start_command(u,c): await u.message.reply_text("V8.8.62 FIXED - Strong Breakdown Fix ✅")
+async def start_command(u,c): await u.message.reply_text("V8.8.63 GAP-FREE #1 ✅")
 @authorized_only
 async def add_command(u,c):
     if c.args:
@@ -176,7 +176,7 @@ async def add_command(u,c):
             WATCHLIST[s]={'time':now,'skip_until':0,'attempts':0,'last_state':'reset','trigger_low':None,'pump_pct':40,'trigger_bar_time':0,'trigger_time':0,'trigger_arm_ms':0,'bullish_confirmed':False,'bearish_bar_time':0,'last_cancel_bar':0,'st_cross_time':0,'bullish_bar_time':0,'wl_add_price':0,'wl_add_change':40,'max_change':40,'max_change_time':now,'peak_pct':40,'peak_price':0,'peak_time':now,'last_30m_avg_price':0,'last_30min_price':0,'last_check':now,'down_count':0,'peak_confirmed':False,'grace_start':0,'grace_end':0,'reentry_target':0}
         cl=c.bot_data.get("http_client")
         if cl: await save_watchlist(cl)
-        await u.message.reply_text(f"{s} added V8.8.62 FIXED")
+        await u.message.reply_text(f"{s} added V8.8.63")
 @authorized_only
 async def remove_command(u,c):
     if c.args:
@@ -222,13 +222,13 @@ async def watchlist_command(u,c):
                     grace=f" {int((skip-now)/60)}m grace max={d.get('max_change',0):.1f}%" if skip>now else f" READY max={d.get('max_change',0):.1f}%"
             msg+=f"{s} #{d.get('attempts',0)+1} {d.get('last_state')}{grace}\n"
     if not msg: msg="Empty"
-    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.62 FIXED:\n{msg}")
+    await u.message.reply_text(f"WL({len(WATCHLIST)}) V8.8.63:\n{msg}")
 @authorized_only
 async def health_command(u,c):
     global BOT1_LAST_SCAN, BOT2_LAST_SCAN
     async with _lock: b12=dict(BOT12_BALANCE_DATA); wl=len(WATCHLIST); open_c=len([k for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'])
     now=time.time(); b1_age=int(now-BOT1_LAST_SCAN) if BOT1_LAST_SCAN else 999; b2_age=int(now-BOT2_LAST_SCAN) if BOT2_LAST_SCAN else 999
-    await u.message.reply_text(f"HEALTH V8.8.62 FIXED\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 20s\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
+    await u.message.reply_text(f"HEALTH V8.8.63\nBOT1:{b1_age}s 300s | BOT2:{b2_age}s 20s\nWL:{wl} Open:{open_c}/4 Bal:${b12['total_balance']:.2f}")
 @authorized_only
 async def open_command(u,c):
     async with _lock: o={k:v for k,v in PAPER_TRADES.items() if v.get('status')=='OPEN'}
@@ -239,7 +239,7 @@ async def open_command(u,c):
 @authorized_only
 async def pnl_command(u,c):
     async with _lock: b=dict(BOT12_BALANCE_DATA)
-    await u.message.reply_text(f"PNL V8.8.62 FIXED ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
+    await u.message.reply_text(f"PNL V8.8.63 ${b['total_balance']:.2f} {b['lifetime_pnl_percent']:.2f}%")
 @authorized_only
 async def close_command(u,c):
     if not c.args: return await u.message.reply_text("Use /close SYM")
@@ -293,7 +293,7 @@ async def resetpnl_command(u,c):
     await u.message.reply_text("PNL RESET")
 @authorized_only
 async def help_command(u,c):
-    await u.message.reply_text("V8.8.62 FIXED - Strong Breakdown + BOT2 + 50 Candle")
+    await u.message.reply_text("V8.8.63 GAP-FREE #1")
 
 async def get_klines_bybit_async(client, symbol, interval='5', limit=400, include_current=False):
     url="https://api.bybit.com/v5/market/kline"; by=symbol if symbol.endswith('USDT') else f"{symbol}USDT"; params={'category':'linear','symbol':by,'interval':interval,'limit':limit}
@@ -410,7 +410,7 @@ async def check_paper_trades(client, df_live, df_closed, symbol):
 
 async def bot1_scan(client):
     global BOT1_LAST_SCAN
-    print("Bot1 V8.8.62 FIXED Operational", flush=True)
+    print("Bot1 V8.8.63 Operational", flush=True)
     while True:
         try:
             BOT1_LAST_SCAN=time.time()
@@ -596,22 +596,26 @@ async def process_symbol(client, symbol):
                     if low_closed <= trig - (tick*TRIGGER_TICKS):
                         tmp_exec=(trig - (tick*TRIGGER_TICKS))*(1-SLIPPAGE_PCT)
                         gap = abs(live - tmp_exec)/tmp_exec if tmp_exec>0 else 0
-                        # V8.8.62 FIX: Strong breakdown below target -> enter immediately
+                        # V8.8.63 FIX: 1st Entry = GAP FREE - No Retest Wait
                         if gap > MAX_DISTANCE_PCT:
-                            if live < tmp_exec:
-                                # Price already below target - strong down momentum, don't wait
+                            if att == 0:
+                                # OPTION A: 1st entry never waits, enter at live
                                 should=True
                                 exec_price=live*(1-SLIPPAGE_PCT)
-                                print(f"[STRONG BREAK] {symbol} live {live} < target {tmp_exec} gap {gap*100:.2f}% ENTER NOW", flush=True)
+                                print(f"[1ST GAP-FREE] {symbol} gap {gap*100:.2f}% live {live} target {tmp_exec} ENTER AT LIVE", flush=True)
                             else:
-                                # Price bounced above target - wait for retest
-                                WATCHLIST[symbol]['last_state']='waiting_reentry'
-                                WATCHLIST[symbol]['reentry_target']=tmp_exec
-                                changed=True
-                                print(f"[RETEST WAIT] {symbol} gap {gap*100:.2f}% live {live} > target {tmp_exec} ST RED", flush=True)
-                                asyncio.create_task(send_telegram(client,f"⏳ Retest Wait {symbol} Gap {gap*100:.1f}% | Live ${live:.8f} Target ${tmp_exec:.8f} ST RED"))
-                                asyncio.create_task(save_watchlist(client))
-                                return changed
+                                if live < tmp_exec:
+                                    should=True
+                                    exec_price=live*(1-SLIPPAGE_PCT)
+                                    print(f"[STRONG BREAK] {symbol} live {live} < target {tmp_exec} gap {gap*100:.2f}% ENTER NOW", flush=True)
+                                else:
+                                    WATCHLIST[symbol]['last_state']='waiting_reentry'
+                                    WATCHLIST[symbol]['reentry_target']=tmp_exec
+                                    changed=True
+                                    print(f"[RETEST WAIT #{att+1}] {symbol} gap {gap*100:.2f}% live {live} > target {tmp_exec} ST RED", flush=True)
+                                    asyncio.create_task(send_telegram(client,f"⏳ Retest Wait {symbol} Gap {gap*100:.1f}% | Live ${live:.8f} Target ${tmp_exec:.8f} ST RED"))
+                                    asyncio.create_task(save_watchlist(client))
+                                    return changed
                         else:
                             should=True
                             exec_price=tmp_exec
@@ -667,7 +671,7 @@ async def process_symbol(client, symbol):
 
 async def bot2_scan(client):
     global BOT2_LAST_SCAN
-    print("Bot2 V8.8.62 FIXED Operational", flush=True)
+    print("Bot2 V8.8.63 Operational", flush=True)
     while True:
         try:
             BOT2_LAST_SCAN=time.time()
@@ -698,7 +702,7 @@ async def bot2_scan(client):
         await asyncio.sleep(BOT2_SCAN_INTERVAL)
 
 @app.route('/')
-def home(): return jsonify({"status":"v8.8.62 FIXED - Strong Breakdown","watchlist":len(WATCHLIST)})
+def home(): return jsonify({"status":"v8.8.63 GAP-FREE #1","watchlist":len(WATCHLIST)})
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
@@ -723,7 +727,7 @@ async def main_async():
     limits=httpx.Limits(max_keepalive_connections=20,max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
         await load_watchlist(client); await load_paper_trades(client); await load_bot12_balance(client)
-        print(f"Loaded V8.8.62 FIXED {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
+        print(f"Loaded V8.8.63 GAP-FREE {len(WATCHLIST)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
         t_req=HTTPXRequest(connection_pool_size=20,connect_timeout=30.0,read_timeout=30.0,write_timeout=30.0)
         app_t=ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"]=client
@@ -743,7 +747,7 @@ async def main_async():
         port=int(os.environ.get("PORT",10000))
         threading.Thread(target=lambda: app.run(host='0.0.0.0',port=port,use_reloader=False),daemon=True).start()
         asyncio.create_task(bot1_scan(client)); asyncio.create_task(bot2_scan(client))
-        print("v8.8.62 FIXED Operational", flush=True)
+        print("v8.8.63 GAP-FREE Operational", flush=True)
         while True: await asyncio.sleep(3600)
 def main():
     loop=asyncio.get_event_loop()
