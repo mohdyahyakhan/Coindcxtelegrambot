@@ -712,24 +712,27 @@ async def main_async():
     main_event_loop = asyncio.get_running_loop()
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
-        # V9.0.4 ONLY: pehle Gist ka raw snapshot lo - khaali/fail load pakadne ke liye
-        try:
-            _r = await client.get(GIST_URL, headers=GIST_HEADERS, timeout=10.0) if GIST_URL else None
-            if _r is None or _r.status_code != 200:
-                _STARTUP_GIST_OK = False
-            else:
-                _STARTUP_GIST_OK = True
-                _files = (_r.json() or {}).get('files', {})
-                def _has_data(fname):
-                    try:
-                        _c = _files.get(fname, {}).get('content', '')
-                        _j = json.loads(_c) if _c else {}
-                        if fname == 'watchlist.json': return bool((_j or {}).get('coins'))
-                        return bool(_j)
-                    except Exception: return False
-                _STARTUP_GIST_HAD_DATA = _has_data('watchlist.json') or _has_data('paper_trades_crypto.json') or _has_data('paper_trades.json')
-        except Exception:
-            _STARTUP_GIST_OK = False
+        # V9.0.4 FIX: Gist check 3 baar retry karo - 1 baar fail hone par block mat karo
+        _STARTUP_GIST_OK = False
+        _STARTUP_GIST_HAD_DATA = False
+        for _try in range(3):
+            try:
+                _r = await client.get(GIST_URL, headers=GIST_HEADERS, timeout=10.0) if GIST_URL else None
+                if _r is not None and _r.status_code == 200:
+                    _STARTUP_GIST_OK = True
+                    _files = (_r.json() or {}).get('files', {})
+                    def _has_data(fname):
+                        try:
+                            _c = _files.get(fname, {}).get('content', '')
+                            _j = json.loads(_c) if _c else {}
+                            if fname == 'watchlist.json': return bool((_j or {}).get('coins'))
+                            return bool(_j)
+                        except Exception: return False
+                    _STARTUP_GIST_HAD_DATA = _has_data('watchlist.json') or _has_data('paper_trades_crypto.json') or _has_data('paper_trades.json')
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(2)
         await load_paper_trades(client); await load_watchlist(client); await load_bot12_balance(client); await load_trade_log(client)
         # V9.0.4 ONLY: agar Gist me data tha par load khaali hua, to overwrite block karo
         _open_c = len([k for k, v in PAPER_TRADES.items() if v.get('status') == 'OPEN'])
