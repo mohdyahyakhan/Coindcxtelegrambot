@@ -712,12 +712,17 @@ async def main_async():
     main_event_loop = asyncio.get_running_loop()
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
-        # V9.0.4 FIX: Gist check 3 baar retry karo - 1 baar fail hone par block mat karo
+
+                # V9.0.4 DEBUG: Gist kyu fail ho raha hai, Logs me status print karo
         _STARTUP_GIST_OK = False
         _STARTUP_GIST_HAD_DATA = False
         for _try in range(3):
             try:
                 _r = await client.get(GIST_URL, headers=GIST_HEADERS, timeout=10.0) if GIST_URL else None
+                if _r is None:
+                    print(f"GIST DEBUG try={_try} GIST_URL is None - GIST_ID missing in Render", flush=True)
+                else:
+                    print(f"GIST DEBUG try={_try} status={_r.status_code} body={_r.text[:200]}", flush=True)
                 if _r is not None and _r.status_code == 200:
                     _STARTUP_GIST_OK = True
                     _files = (_r.json() or {}).get('files', {})
@@ -730,9 +735,10 @@ async def main_async():
                         except Exception: return False
                     _STARTUP_GIST_HAD_DATA = _has_data('watchlist.json') or _has_data('paper_trades_crypto.json') or _has_data('paper_trades.json')
                     break
-            except Exception:
-                pass
+            except Exception as _e:
+                print(f"GIST DEBUG try={_try} exception={_e}", flush=True)
             await asyncio.sleep(2)
+            
         await load_paper_trades(client); await load_watchlist(client); await load_bot12_balance(client); await load_trade_log(client)
         # V9.0.4 ONLY: agar Gist me data tha par load khaali hua, to overwrite block karo
         _open_c = len([k for k, v in PAPER_TRADES.items() if v.get('status') == 'OPEN'])
