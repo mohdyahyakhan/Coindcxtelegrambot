@@ -1,4 +1,4 @@
-# COINDEX V9.0 SIMPLE - paper trading bot (backtest wali validated strategy)
+# COINDEX V9.0.3 SIMPLE - paper trading bot (backtest wali validated strategy)
 # Strategy (simple_backtest_v11.py ke same):
 #   24h pump >= PUMP_PERCENT_24H & turnover >= 10M  -> watchlist
 #   ST cross below EMA300 (close dono ke neeche) -> trigger = cross bar low - 1.5 tick
@@ -13,7 +13,7 @@ from telegram.request import HTTPXRequest
 app = Flask(__name__)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-VERSION = "V9.0.2 SIMPLE"
+VERSION = "V9.0.3 SIMPLE"
 
 
 def _env_f(name, default):
@@ -508,8 +508,8 @@ async def check_paper_trades(client, df, symbol, live_price):
         amt = trade.get('trade_amount_usdt') or trade['balance_at_entry'] * POSITION_SIZE_PERCENT
         if hi >= trade['sl']:                         # SL pehle (conservative)
             book_px = await book_fill(client, symbol, 'buy', amt * (1 + SL_PERCENT))
-            fill = max(trade['sl'], live_price) * (1 + SL_EXTRA_SLIPPAGE)
-            if book_px: fill = max(fill, book_px)
+            floor_fill = max(trade['sl'], live_price) * (1 + SL_EXTRA_SLIPPAGE)
+            fill = max(floor_fill, book_px) if book_px else floor_fill
             exit_slip = (fill - trade['sl']) / trade['sl'] * 100
             ref = max(trade['sl'], live_price)
             exit_book_slip = ((book_px - ref) / ref * 100) if book_px else None     # sirf orderbook se napa hua (floor ke bina)
@@ -518,7 +518,12 @@ async def check_paper_trades(client, df, symbol, live_price):
                 nusdt = _close_trade_locked(symbol, fill, 'SL', extra={'exit_slip_pct': exit_slip, 'exit_book_px': book_px,
                                                                       'exit_book_slip_pct': exit_book_slip})
             await _save_after_close(client)
-            asyncio.create_task(send_telegram(client, f"SL {symbol} ${nusdt:.2f} fill ${fill:.8f} slip {exit_slip:.2f}% cooldown 4h"))
+            if book_px:
+                book_txt = f"book slip {exit_book_slip:.2f}% (used {'book' if book_px > floor_fill else 'floor'})"
+            else:
+                book_txt = "book N/A (orderbook fail, floor use hua)"
+            asyncio.create_task(send_telegram(client,
+                f"SL {symbol} ${nusdt:.2f} fill ${fill:.8f} slip {exit_slip:.2f}%\n{book_txt} | cooldown 4h"))
             return True
         if lo <= trade['tp']:
             async with _lock:
@@ -657,8 +662,14 @@ async def process_symbol(client, symbol):
                 w['state'] = 'short'; w['break_level'] = 0.0; opened = True
         if opened:
             await save_paper_trades(client)
+            if book_px:
+                book_txt = (f"book fill ${book_px:.8f} ({(live_price - book_px) / live_price * 100:.2f}% vs live, "
+                            f"used {'book' if book_px < est else 'floor'})")
+            else:
+                book_txt = "book N/A (orderbook fail, floor use hua)"
             asyncio.create_task(send_telegram(client,
-                f"SHORT {symbol} Entry ${ep:.8f} TP ${tp:.8f} SL ${sl:.8f} | slip vs break {(level - ep) / level * 100:.2f}% | max={max_change:.0f}%"))
+                f"SHORT {symbol} Entry ${ep:.8f} TP ${tp:.8f} SL ${sl:.8f}\n"
+                f"slip vs break {(level - ep) / level * 100:.2f}% | {book_txt} | max={max_change:.0f}%"))
             return True
         return changed
     except Exception as e:
