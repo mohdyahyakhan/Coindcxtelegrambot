@@ -1,4 +1,4 @@
-# COINDEX V9.0.3 SIMPLE - paper trading bot (backtest wali validated strategy)
+# COINDEX V9.0.4 SIMPLE - paper trading bot (backtest wali validated strategy)
 # Strategy (simple_backtest_v11.py ke same):
 #   24h pump >= PUMP_PERCENT_24H & turnover >= 10M  -> watchlist
 #   ST cross below EMA300 (close dono ke neeche) -> trigger = cross bar low - 1.5 tick
@@ -13,13 +13,11 @@ from telegram.request import HTTPXRequest
 app = Flask(__name__)
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
-VERSION = "V9.0.3 SIMPLE"
-
+VERSION = "V9.0.4 SIMPLE"
 
 def _env_f(name, default):
     try: return float(os.environ.get(name, default))
     except Exception: return default
-
 
 # ==================== STRATEGY CONFIG ====================
 # Render ke Environment me PUMP_PERCENT_24H / TP_PERCENT / SL_PERCENT / POSITION_SIZE_PERCENT se badal sakte hain
@@ -77,7 +75,10 @@ BOT12_BALANCE_DATA = {"total_balance": BOT12_STARTING_BALANCE, "starting_balance
                       "lifetime_pnl_usdt": 0.0, "lifetime_pnl_percent": 0.0}
 application = None; main_event_loop = None; webhook_queue = asyncio.Queue()
 BOT1_LAST_SCAN = 0; BOT2_LAST_SCAN = 0
-
+# V9.0.4 ONLY: startup load protection - Gist fail/khaali load hone par overwrite rokne ke liye
+_STARTUP_GIST_OK = True
+_STARTUP_GIST_HAD_DATA = False
+_BLOCK_SAVES = False
 
 # ==================== HELPERS ====================
 def calc_pnl(entry, exit_price, amount_usdt):
@@ -88,7 +89,6 @@ def calc_pnl(entry, exit_price, amount_usdt):
     fee = (amount_usdt + exit_value) * EFFECTIVE_FEE_RATE
     return gross - fee, gross, fee
 
-
 def price_to_tick(price, tick):
     try:
         if not price or not tick or tick <= 0 or price <= 0: return float(price) if price else 0.0
@@ -98,11 +98,9 @@ def price_to_tick(price, tick):
     except Exception:
         return round(float(price), 8) if price else 0.0
 
-
 def new_wl_entry(change, price, now):
     return {'time': now, 'last_pump': now, 'state': 'watching', 'break_level': 0.0, 'trig_ts': 0,
             'last_bar_ts': 0, 'max_change': change, 'pump_pct': change, 'wl_add_price': price}
-
 
 def authorized_only(func):
     @functools.wraps(func)
@@ -112,7 +110,6 @@ def authorized_only(func):
         if user_id != allowed_id and chat_id != allowed_id: return
         return await func(update, context, *args, **kwargs)
     return wrapper
-
 
 # ==================== GIST STORAGE ====================
 async def gist_get(client, filename):
@@ -127,8 +124,9 @@ async def gist_get(client, filename):
     except Exception: return {}
     return {}
 
-
 async def gist_set_locked(client, filename, content):
+    # V9.0.4 ONLY: startup me Gist load fail hua tha to overwrite mat karo
+    if _BLOCK_SAVES: return False
     if not GIST_URL or not GITHUB_TOKEN: return False
     async with _gist_lock:
         payload = {"files": {filename: {"content": json.dumps(content, indent=2)}}}
@@ -138,7 +136,6 @@ async def gist_set_locked(client, filename, content):
                 if r.status_code == 200: return True
             except Exception: await asyncio.sleep(2)
     return False
-
 
 async def save_watchlist(c):
     async with _lock: snapshot = dict(WATCHLIST)
@@ -156,7 +153,6 @@ async def save_bot12_balance(c):
 async def save_trade_log(c):
     async with _lock: snapshot = list(TRADE_LOG)
     await gist_set_locked(c, 'trade_log.json', {'trades': snapshot})
-
 
 async def load_watchlist(c):
     """Purane format ko naye state machine me convert karta hai (watching / waiting_break / short)."""
@@ -178,7 +174,6 @@ async def load_watchlist(c):
             w['last_bar_ts'] = d.get('last_bar_ts', 0)
             WATCHLIST[cs] = w
 
-
 async def load_paper_trades(c):
     global PAPER_TRADES
     data = await gist_get(c, 'paper_trades_crypto.json') or await gist_get(c, 'paper_trades.json') or {}
@@ -195,13 +190,11 @@ async def load_trade_log(c):
     d = await gist_get(c, 'trade_log.json')
     async with _lock: TRADE_LOG = list((d or {}).get('trades', []))
 
-
 async def send_telegram(client, msg):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID: return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     try: await client.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"}, timeout=10.0)
     except Exception: pass
-
 
 # ==================== TRADE CLOSE (lock ke andar call karein) ====================
 def _close_trade_locked(symbol, exit_price, reason, extra=None, cooldown=True):
@@ -223,10 +216,8 @@ def _close_trade_locked(symbol, exit_price, reason, extra=None, cooldown=True):
     KLINE_CACHE.pop(symbol, None); LIVE_PRICE_CACHE.pop(symbol, None)
     return nusdt
 
-
 async def _save_after_close(client):
     await save_bot12_balance(client); await save_paper_trades(client); await save_trade_log(client); await save_watchlist(client)
-
 
 # ==================== TELEGRAM COMMANDS ====================
 @authorized_only
@@ -375,7 +366,6 @@ async def resetpnl_command(u, c):
 async def help_command(u, c):
     await u.message.reply_text(f"{VERSION}\n/watchlist /open /pnl /stats /health\n/add SYM /remove SYM /removeall confirm\n/close SYM /exit ALL /resetpnl bot12 confirm")
 
-
 # ==================== BYBIT DATA ====================
 async def get_klines_bybit_async(client, symbol, interval='5', limit=KLINE_LIMIT, include_current=False):
     url = "https://api.bybit.com/v5/market/kline"; by = symbol if symbol.endswith('USDT') else f"{symbol}USDT"
@@ -391,7 +381,6 @@ async def get_klines_bybit_async(client, symbol, interval='5', limit=KLINE_LIMIT
     except Exception: pass
     return None
 
-
 async def get_tick_size(client, symbol):
     if symbol in TICK_CACHE: return TICK_CACHE[symbol]
     url = "https://api.bybit.com/v5/market/instruments-info"; by = symbol if symbol.endswith('USDT') else f"{symbol}USDT"
@@ -402,7 +391,6 @@ async def get_tick_size(client, symbol):
             if tick > 0: TICK_CACHE[symbol] = tick; return tick
     except Exception: return None
     return None
-
 
 async def get_live_price(client, symbol):
     url = "https://api.bybit.com/v5/market/tickers"; by = symbol if symbol.endswith('USDT') else f"{symbol}USDT"
@@ -415,7 +403,6 @@ async def get_live_price(client, symbol):
     except Exception: pass
     return None, None, None
 
-
 async def get_klines_cached(client, symbol):
     now = time.time()
     e = KLINE_CACHE.get(symbol)
@@ -424,7 +411,6 @@ async def get_klines_cached(client, symbol):
     if df is not None: KLINE_CACHE[symbol] = {'df': df, 'time': now}
     return df
 
-
 async def get_live_price_cached(client, symbol):
     now = time.time()
     e = LIVE_PRICE_CACHE.get(symbol)
@@ -432,7 +418,6 @@ async def get_live_price_cached(client, symbol):
     price, change, high24 = await get_live_price(client, symbol)
     if price and price > 0: LIVE_PRICE_CACHE[symbol] = {'price': price, 'change': change, 'high24': high24, 'time': now}
     return price, change
-
 
 async def book_fill(client, symbol, side, notional_usdt):
     """Orderbook walk: side 'sell' (short entry) bids khata hai, 'buy' (SL exit) asks.
@@ -457,7 +442,6 @@ async def book_fill(client, symbol, side, notional_usdt):
         return cost / qty if qty > 0 else None
     except Exception:
         return None
-
 
 def calculate_supertrend(df, period=ATR_PERIOD, multiplier=ATR_MULTIPLIER):
     df = df.copy()
@@ -486,7 +470,6 @@ def calculate_supertrend(df, period=ATR_PERIOD, multiplier=ATR_MULTIPLIER):
     df['ema_val'] = df['close'].ewm(span=EMA_PERIOD, adjust=False).mean()
     df['atr'] = atr
     return df
-
 
 # ==================== EXIT CHECK ====================
 async def check_paper_trades(client, df, symbol, live_price):
@@ -535,7 +518,6 @@ async def check_paper_trades(client, df, symbol, live_price):
     except Exception as e: print(f"check trades {symbol}: {e}", flush=True)
     return False
 
-
 # ==================== BOT 1: PUMP SCANNER ====================
 async def bot1_scan(client):
     global BOT1_LAST_SCAN
@@ -576,7 +558,6 @@ async def bot1_scan(client):
                 if changed: await save_watchlist(client)
         except Exception as e: print(f"Bot1 {e}", flush=True)
         await asyncio.sleep(BOT1_SCAN_INTERVAL)
-
 
 # ==================== BOT 2: SIGNAL + ENTRY ====================
 async def process_symbol(client, symbol):
@@ -675,7 +656,6 @@ async def process_symbol(client, symbol):
     except Exception as e:
         print(f"proc {symbol} {e}", flush=True); return False
 
-
 async def scan_cycle(client):
     """Watchlist ke saare symbols ek cycle me (SCAN_CONCURRENCY ek saath). Return: kitne symbols check hue."""
     async with _lock:
@@ -691,7 +671,6 @@ async def scan_cycle(client):
     await asyncio.gather(*[one(x) for x in syms])
     return len(syms)
 
-
 async def bot2_scan(client):
     global BOT2_LAST_SCAN
     print(f"Bot2 {VERSION} Operational (every {BOT2_SCAN_INTERVAL}s)", flush=True)
@@ -704,7 +683,6 @@ async def bot2_scan(client):
                 await asyncio.sleep(5); continue
         except Exception as e: print(f"Bot2 {e}", flush=True)
         await asyncio.sleep(max(1.0, BOT2_SCAN_INTERVAL - (time.time() - t0)))
-
 
 # ==================== WEB / MAIN ====================
 @app.route('/')
@@ -730,12 +708,38 @@ async def process_webhook_queue():
         finally: webhook_queue.task_done()
 
 async def main_async():
-    global application, main_event_loop
+    global application, main_event_loop, _STARTUP_GIST_OK, _STARTUP_GIST_HAD_DATA, _BLOCK_SAVES
     main_event_loop = asyncio.get_running_loop()
     limits = httpx.Limits(max_keepalive_connections=20, max_connections=100)
     async with httpx.AsyncClient(limits=limits) as client:
+        # V9.0.4 ONLY: pehle Gist ka raw snapshot lo - khaali/fail load pakadne ke liye
+        try:
+            _r = await client.get(GIST_URL, headers=GIST_HEADERS, timeout=10.0) if GIST_URL else None
+            if _r is None or _r.status_code != 200:
+                _STARTUP_GIST_OK = False
+            else:
+                _STARTUP_GIST_OK = True
+                _files = (_r.json() or {}).get('files', {})
+                def _has_data(fname):
+                    try:
+                        _c = _files.get(fname, {}).get('content', '')
+                        _j = json.loads(_c) if _c else {}
+                        if fname == 'watchlist.json': return bool((_j or {}).get('coins'))
+                        return bool(_j)
+                    except Exception: return False
+                _STARTUP_GIST_HAD_DATA = _has_data('watchlist.json') or _has_data('paper_trades_crypto.json') or _has_data('paper_trades.json')
+        except Exception:
+            _STARTUP_GIST_OK = False
         await load_paper_trades(client); await load_watchlist(client); await load_bot12_balance(client); await load_trade_log(client)
+        # V9.0.4 ONLY: agar Gist me data tha par load khaali hua, to overwrite block karo
+        _open_c = len([k for k, v in PAPER_TRADES.items() if v.get('status') == 'OPEN'])
+        if (not _STARTUP_GIST_OK) or (_STARTUP_GIST_HAD_DATA and len(WATCHLIST) == 0 and _open_c == 0):
+            _BLOCK_SAVES = True
+            print(f"STARTUP PROTECTION ACTIVE: Gist OK={_STARTUP_GIST_OK} HadData={_STARTUP_GIST_HAD_DATA} Loaded WL=0 Open=0 - saves blocked", flush=True)
+            await send_telegram(client, f"⚠️ {VERSION} STARTUP PROTECTION: Gist se data load nahi hua (Gist OK={_STARTUP_GIST_OK}). Saves BLOCKED hai taaki watchlist/PnL na ude. Gist check karo, phir restart karo.")
         print(f"Loaded {VERSION} WL={len(WATCHLIST)} Trades={len(TRADE_LOG)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}", flush=True)
+        # V9.0.4 ONLY: startup load Telegram pe - har restart pe pata chalega kya load hua
+        await send_telegram(client, f"Loaded {VERSION} WL={len(WATCHLIST)} Open={_open_c} Closed={len(TRADE_LOG)} Bal ${BOT12_BALANCE_DATA['total_balance']:.2f}")
         t_req = HTTPXRequest(connection_pool_size=20, connect_timeout=30.0, read_timeout=30.0, write_timeout=30.0)
         app_t = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).request(t_req).build()
         app_t.bot_data["http_client"] = client
