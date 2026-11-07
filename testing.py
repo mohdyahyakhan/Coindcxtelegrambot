@@ -365,7 +365,7 @@ async def health_command(u, c):
                                f"WL:{wl} Open:{open_c}/{MAX_OPEN_TRADES} Closed:{closed} Bal:${b12['total_balance']:.2f}\n"
                                f"Cfg: pump>={PUMP_PERCENT_24H:.0f}% TP {TARGET_TP_PERCENT*100:.0f}% SL {SL_PERCENT*100:.0f}% size {POSITION_SIZE_PERCENT*100:.0f}% lev {LEVERAGE:.0f}x slots {MAX_OPEN_TRADES} expiry {WATCH_EXPIRY_SEC / 3600:.0f}h\n"
                                f"Slip floor: entry {SLIPPAGE_PCT*100:.1f}% SL {SL_EXTRA_SLIPPAGE*100:.1f}%\n"
-                               f"Gist: {('ON last-save ' + str(int(now - GIST_STATUS['last_ok'])) + 's ago, fails ' + str(GIST_STATUS['fails'])) if gist_enabled() else 'OFF - restart par state mit jayega'}")
+                               f"Gist: {('ON last-ok ' + str(int(now - GIST_STATUS['last_ok'])) + 's ago, fails ' + str(GIST_STATUS['fails'])) if gist_enabled() else 'OFF - restart par state mit jayega'}")
 
 @authorized_only
 async def open_command(u, c):
